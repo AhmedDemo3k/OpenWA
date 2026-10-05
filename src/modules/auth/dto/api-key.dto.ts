@@ -1,4 +1,15 @@
-import { IsString, IsOptional, IsEnum, IsArray, IsDateString, MinLength, MaxLength } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  IsArray,
+  IsDateString,
+  IsInt,
+  Min,
+  Max,
+  MinLength,
+  MaxLength,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ApiKeyRole } from '../entities/api-key.entity';
 
@@ -46,6 +57,30 @@ export class CreateApiKeyDto {
   @IsOptional()
   @IsDateString()
   expiresAt?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Requests allowed inside the window. Counted per key, not per address, so one client ' +
+      'cannot throttle another. Omit or pass null to inherit RATE_LIMIT_MEDIUM_LIMIT.',
+    example: 300,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000)
+  rateLimit?: number | null;
+
+  @ApiPropertyOptional({
+    description: 'Window that rateLimit is counted over. Defaults to 60 seconds.',
+    example: 60,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(86_400)
+  rateLimitWindowSeconds?: number | null;
 }
 
 export class ApiKeyResponseDto {
@@ -80,6 +115,15 @@ export class ApiKeyResponseDto {
 
   @ApiProperty()
   usageCount: number;
+
+  @ApiPropertyOptional({
+    description: 'Per-key request limit, or null when the global limits apply',
+    nullable: true,
+  })
+  rateLimit: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  rateLimitWindowSeconds: number | null;
 
   @ApiProperty()
   createdAt: Date;
@@ -122,4 +166,21 @@ export class UpdateApiKeyDto {
   @IsOptional()
   @IsDateString()
   expiresAt?: string;
+
+  @ApiPropertyOptional({
+    description: 'Pass null to clear the per-key override and fall back to the global limits',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000)
+  rateLimit?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(86_400)
+  rateLimitWindowSeconds?: number | null;
 }

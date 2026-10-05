@@ -196,3 +196,189 @@ describe('AuthService (production bootstrap)', () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+/**
+ * `getRateLimit` is read by the throttler on every request, ahead of `validateApiKey`.
+ * It cannot throw: the guard falls back to the global limits on failure, but a throw here
+ * would otherwise turn a missing rate limit into a 500.
+ */
+describe('AuthService.getRateLimit', () => {
+  let repo: { findOne: jest.Mock };
+  let service: AuthService;
+
+  const withKey = (overrides: Partial<ApiKey>): void => {
+    repo.findOne.mockResolvedValue({
+      id: 'id',
+      isActive: true,
+      expiresAt: null,
+      rateLimit: null,
+      rateLimitWindowSeconds: null,
+      ...overrides,
+    });
+  };
+
+  beforeEach(() => {
+    process.env.AUTH_KEY_FILE = join(tmpdir(), `openwa-apikey-${Math.random().toString(36).slice(2)}.key`);
+    repo = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+  });
+
+  const build = async (): Promise<AuthService> => {
+    const module = await Test.createTestingModule({
+      providers: [AuthService, { provide: getRepositoryToken(ApiKey, 'main'), useValue: repo }],
+    }).compile();
+    return module.get<AuthService>(AuthService);
+  };
+
+  it('returns null for a key with no override, so the global limits apply', async () => {
+    withKey({ rateLimit: null });
+    service = await build();
+
+    expect(await service.getRateLimit(STRONG_KEY)).toBeNull();
+  });
+
+  it('returns the configured limit with the window in milliseconds', async () => {
+    withKey({ rateLimit: 25, rateLimitWindowSeconds: 10 });
+    service = await build();
+
+    expect(await service.getRateLimit(STRONG_KEY)).toEqual({ limit: 25, ttlMs: 10_000 });
+  });
+
+  it('defaults the window to a minute when only a limit is set', async () => {
+    withKey({ rateLimit: 25, rateLimitWindowSeconds: null });
+    service = await build();
+
+    expect(await service.getRateLimit(STRONG_KEY)).toEqual({ limit: 25, ttlMs: 60_000 });
+  });
+
+  it('ignores a nonsensical window rather than producing a zero-length bucket', async () => {
+    // A ttl of 0 would make every request look unlimited rather than limited.
+    withKey({ rateLimit: 25, rateLimitWindowSeconds: 0 });
+    service = await build();
+
+    expect(await service.getRateLimit(STRONG_KEY)).toEqual({ limit: 25, ttlMs: 60_000 });
+  });
+
+  it('returns null for an unknown key instead of throwing', async () => {
+    repo.findOne.mockResolvedValue(null);
+    service = await build();
+
+    // The 401 stays ApiKeyGuard's job. Two guards rejecting for one bad key would make the
+    // reason ambiguous in the logs.
+    await expect(service.getRateLimit('never-issued')).resolves.toBeNull();
+  });
+
+  it('returns null for a revoked key', async () => {
+    withKey({ isActive: false, rateLimit: 25, rateLimitWindowSeconds: 60 });
+    service = await build();
+
+    expect(await service.getRateLimit(STRONG_KEY)).toBeNull();
+  });
+
+  it('returns null for an expired key', async () => {
+    withKey({ expiresAt: new Date(Date.now() - 1000), rateLimit: 25, rateLimitWindowSeconds: 60 });
+    service = await build();
+
+    expect(await service.getRateLimit(STRONG_KEY)).toBeNull();
+  });
+
+  it('looks the key up by hash, never by raw value', async () => {
+    withKey({ rateLimit: null });
+    service = await build();
+
+    await service.getRateLimit(STRONG_KEY);
+
+    expect(repo.findOne).toHaveBeenCalledWith({ where: { keyHash: hash(STRONG_KEY) } });
+  });
+});
+
+describe('AuthService per-key limit persistence', () => {
+  const savedEnv = { ...process.env };
+  let repo: {
+    create: jest.Mock;
+    save: jest.Mock;
+    findOne: jest.Mock;
+    remove: jest.Mock;
+    find: jest.Mock;
+    count: jest.Mock;
+  };
+  let service: AuthService;
+
+  beforeEach(async () => {
+    process.env.AUTH_KEY_FILE = join(tmpdir(), `openwa-apikey-${Math.random().toString(36).slice(2)}.key`);
+    repo = {
+      count: jest.fn().mockResolvedValue(1),
+      create: jest.fn((entity: ApiKey) => entity),
+      save: jest.fn(async (entity: ApiKey) => entity),
+      findOne: jest.fn(),
+      remove: jest.fn(async () => undefined),
+      find: jest.fn().mockResolvedValue([]),
+    };
+    const module = await Test.createTestingModule({
+      providers: [AuthService, { provide: getRepositoryToken(ApiKey, 'main'), useValue: repo }],
+    }).compile();
+    service = module.get<AuthService>(AuthService);
+  });
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
+  });
+
+  it('stores the limit on create', async () => {
+    await service.createApiKey({ name: 'Throttled', rateLimit: 30, rateLimitWindowSeconds: 60 });
+
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ rateLimit: 30, rateLimitWindowSeconds: 60 }));
+  });
+
+  it('leaves the limit null on create when unset', async () => {
+    // A key created with no limit must inherit the global one rather than getting a limit
+    // of zero, which would block it entirely.
+    await service.createApiKey({ name: 'Unthrottled' });
+
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ rateLimit: null, rateLimitWindowSeconds: null }),
+    );
+  });
+
+  it('applies an update to the limit', async () => {
+    repo.findOne.mockResolvedValue({
+      id: 'id',
+      name: 'Key',
+      rateLimit: 10,
+      rateLimitWindowSeconds: 60,
+    });
+
+    await service.update('id', { rateLimit: 99 });
+
+    expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ rateLimit: 99, rateLimitWindowSeconds: 60 }));
+  });
+
+  it('clears the override when the update passes null', async () => {
+    repo.findOne.mockResolvedValue({
+      id: 'id',
+      name: 'Key',
+      rateLimit: 10,
+      rateLimitWindowSeconds: 60,
+    });
+
+    // null is a real value here, so this has to be an `undefined` check rather than a
+    // truthiness one, or there would be no way to go back to the global limits.
+    await service.update('id', { rateLimit: null });
+
+    expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ rateLimit: null }));
+  });
+
+  it('leaves the limit alone when the update omits it', async () => {
+    repo.findOne.mockResolvedValue({
+      id: 'id',
+      name: 'Key',
+      rateLimit: 10,
+      rateLimitWindowSeconds: 60,
+    });
+
+    await service.update('id', { name: 'Renamed' });
+
+    expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ rateLimit: 10 }));
+  });
+});

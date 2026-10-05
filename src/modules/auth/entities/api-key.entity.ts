@@ -46,6 +46,21 @@ export class ApiKey {
   @Column({ type: 'int', default: 0 })
   usageCount: number;
 
+  /**
+   * Requests allowed inside `rateLimitWindowSeconds`, or null to inherit the global limits
+   * from RATE_LIMIT_MEDIUM_LIMIT and friends.
+   *
+   * Buckets are keyed per API key, so the limit is per key rather than per address. That
+   * matters here because every request arrives through the Tailscale funnel from the same
+   * host address: a shared IP bucket meant one noisy client throttled everyone else.
+   */
+  @Column({ type: 'int', nullable: true })
+  rateLimit: number | null;
+
+  /** Window that `rateLimit` is counted over. Ignored when `rateLimit` is null. */
+  @Column({ type: 'int', nullable: true })
+  rateLimitWindowSeconds: number | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

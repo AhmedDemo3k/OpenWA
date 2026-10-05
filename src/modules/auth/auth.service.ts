@@ -164,6 +164,8 @@ export class AuthService implements OnModuleInit {
       allowedIps: dto.allowedIps || null,
       allowedSessions: dto.allowedSessions || null,
       expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+      rateLimit: dto.rateLimit ?? null,
+      rateLimitWindowSeconds: dto.rateLimitWindowSeconds ?? null,
     });
 
     const saved = await this.apiKeyRepository.save(apiKey);
@@ -198,6 +200,10 @@ export class AuthService implements OnModuleInit {
     if (dto.allowedIps !== undefined) apiKey.allowedIps = dto.allowedIps;
     if (dto.allowedSessions !== undefined) apiKey.allowedSessions = dto.allowedSessions;
     if (dto.expiresAt !== undefined) apiKey.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+    // `null` is meaningful here and clears the override, so this checks for undefined
+    // rather than truthiness.
+    if (dto.rateLimit !== undefined) apiKey.rateLimit = dto.rateLimit;
+    if (dto.rateLimitWindowSeconds !== undefined) apiKey.rateLimitWindowSeconds = dto.rateLimitWindowSeconds;
 
     return this.apiKeyRepository.save(apiKey);
   }
@@ -257,6 +263,33 @@ export class AuthService implements OnModuleInit {
     await this.apiKeyRepository.save(apiKey);
 
     return apiKey;
+  }
+
+  /**
+   * The rate limit configured on a key, or null to inherit the global limits.
+   *
+   * Read by PerApiKeyThrottlerGuard, which runs before validateApiKey. Returns null for an
+   * unknown, revoked or unlimited key rather than throwing: the guard treats a missing
+   * limit as "use the defaults", and leaving the failure to ApiKeyGuard keeps the 401 and
+   * the 429 independent of each other.
+   */
+  async getRateLimit(rawKey: string): Promise<{ limit: number; ttlMs: number } | null> {
+    const apiKey = await this.apiKeyRepository.findOne({ where: { keyHash: this.hashKey(rawKey) } });
+
+    if (!apiKey || !apiKey.isActive || apiKey.rateLimit === null || apiKey.rateLimit === undefined) {
+      return null;
+    }
+
+    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
+      return null;
+    }
+
+    // A window is optional; without one the limit reads as "per minute", matching the
+    // RATE_LIMIT_MEDIUM_* defaults it replaces.
+    const windowSeconds =
+      apiKey.rateLimitWindowSeconds && apiKey.rateLimitWindowSeconds > 0 ? apiKey.rateLimitWindowSeconds : 60;
+
+    return { limit: apiKey.rateLimit, ttlMs: windowSeconds * 1000 };
   }
 
   private generateKey(): string {
