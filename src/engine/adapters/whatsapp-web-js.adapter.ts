@@ -353,7 +353,30 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
               };
             }
           } catch (error) {
-            this.logger.error('Error downloading media', String(error));
+            // String(error) alone is useless here: whatsapp-web.js ships minified, so a thrown
+            // error surfaces as "r: r" and nothing about the failure can be recovered from
+            // the log. Record the structural fields too, so the next occurrence is
+            // diagnosable rather than a dead end. The message is still delivered -- only the
+            // media attachment is lost -- so this must not rethrow and drop the message.
+            const detail =
+              error && typeof error === 'object'
+                ? {
+                    name: (error as Error).name,
+                    message: (error as Error).message,
+                    code: (error as { code?: unknown }).code,
+                    statusCode: (error as { statusCode?: unknown }).statusCode,
+                  }
+                : { message: String(error) };
+
+            this.logger.error('Error downloading media', (error as Error)?.stack ?? String(error), {
+              action: 'media_download_failed',
+              sessionId: this.config.sessionId,
+              remoteJid: msg.from,
+              msgId: msg.id?._serialized,
+              msgType: msg.type,
+              hasMedia: msg.hasMedia,
+              ...detail,
+            });
           }
         }
 

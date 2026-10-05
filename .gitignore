@@ -98,3 +98,8 @@ auto-reply-bot/
 wa_qr*.png
 fix_funnel_log.txt
 *.err
+
+# Empty scratch notes that kept reappearing in the project root
+"New Text Document.txt"
+"New Text Document (3).txt"
+"npm run dev.txt"

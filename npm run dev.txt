@@ -1,0 +1,46 @@
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RoutesResolver] StatusController {/api/sessions/:sessionId/status}: +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/status, GET} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/status/:contactId, GET} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/status/send-text, POST} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/status/send-image, POST} route +1ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/status/send-video, POST} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/status/:statusId, DELETE} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RoutesResolver] CatalogController {/api/sessions/:sessionId}: +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/catalog, GET} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/catalog/products, GET} route +1ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/catalog/products/:productId, GET} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/messages/send-product, POST} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/sessions/:sessionId/messages/send-catalog, POST} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RoutesResolver] PluginsController {/api/plugins}: +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/plugins, GET} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/plugins/:id, GET} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/plugins/:id/enable, POST} route +1ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/plugins/:id/disable, POST} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/plugins/:id/config, PUT} route +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/api/plugins/:id/health, GET} route +1ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RoutesResolver] RootController {/api}: +0ms
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [RouterExplorer] Mapped {/, GET} route +0ms
+[api] {"timestamp":"2026-09-16T13:25:49.870Z","level":"info","context":"PluginLoaderService","message":"Loaded 0 plugins","action":"plugins_loaded","count":0}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":""}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":""}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":"  🟢 Welcome to OpenWA - WhatsApp API Gateway"}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":""}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":"  📊 Dashboard: https://home.tailcb9811.ts.net:8443"}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":"  📚 API Docs:  http://localhost:2785/api/docs"}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":""}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":"  🔑 API Key:"}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":"     dev-admin-key"}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":""}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"}
+[api] {"timestamp":"2026-09-16T13:25:49.876Z","level":"info","context":"AuthService","message":""}
+[api] {"timestamp":"2026-09-16T13:25:49.877Z","level":"info","context":"PluginLoaderService","message":"[whatsapp-web.js] WhatsApp-web.js engine plugin loaded","pluginId":"whatsapp-web.js"}
+[api] {"timestamp":"2026-09-16T13:25:49.878Z","level":"info","context":"PluginLoaderService","message":"[whatsapp-web.js] WhatsApp-web.js engine plugin enabled","pluginId":"whatsapp-web.js"}
+[api] {"timestamp":"2026-09-16T13:25:49.878Z","level":"info","context":"PluginLoaderService","message":"Plugin enabled: WhatsApp Web.js Engine","pluginId":"whatsapp-web.js","action":"plugin_enabled"}
+[api] {"timestamp":"2026-09-16T13:25:49.878Z","level":"info","context":"EngineFactory","message":"Engine plugin enabled: whatsapp-web.js","action":"engine_enabled","engineType":"whatsapp-web.js"}
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM    WARN [DockerService] Docker socket not available. Container orchestration disabled.
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM    WARN [DockerService] connect ENOENT /var/run/docker.sock
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [DockerService] [Bootstrap Orchestration] Docker not available, skipping
+[api] [Nest] 26296  - 09/16/2026, 4:25:49 PM     LOG [NestApplication] Nest application successfully started +7ms
+[api] 🚀 OpenWA is running on: http://localhost:2785
+[api] 📚 Swagger docs: http://localhost:2785/api/docs

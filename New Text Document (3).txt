@@ -1,0 +1,12 @@
+npm.cmd install -g opencode-ai
+opencode --version
+
+
+cd C:\Users\homek\Downloads\OpenWA
+opencode
+
+
+
+"استكمل شغل موقع زاد مع OpenWA: أصلح الداشبورد (502 على :8443), شغّل npm run dev في الخلفية, تأكد من السيرفر منظوم, وحلّق على الرابطين."
+
+https://auth.opencode.ai/authorize?client_id=app&redirect_uri=https%3A%2F%2Fopencode.ai%2Fauth%2Fcallback&response_type=code&state=7de5bd29-75d4-4d8c-9cc4-8cfc280e76dd

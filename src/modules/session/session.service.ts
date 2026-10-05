@@ -97,6 +97,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       SessionStatus.AUTHENTICATING,
     ];
 
+    // Captured BEFORE the reset below. Asking afterwards would always come back empty,
+    // because the reset is precisely what clears these statuses.
+    let resumable: Session[] = [];
+    try {
+      resumable = await this.sessionRepository.find({
+        where: { status: In([SessionStatus.READY, SessionStatus.INITIALIZING]) },
+      });
+    } catch (error) {
+      // A failure here only costs us the autostart convenience; the reset still has to run.
+      this.logger.error('Could not read sessions for autostart', String(error), {
+        action: 'startup_resume_read_failed',
+      });
+    }
+
     const result = await this.sessionRepository.update(
       { status: In(activeStatuses) },
       { status: SessionStatus.DISCONNECTED },
@@ -107,6 +121,55 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         action: 'startup_reset',
         affected: result.affected,
       });
+    }
+
+    await this.resumeSessionsAfterRestart(resumable);
+  }
+
+  /**
+   * Bring back the sessions that were live when the process went down.
+   *
+   * The reset in `onModuleInit` is deliberate: the engines are gone, so a persisted status
+   * of READY would be a lie. But leaving them at DISCONNECTED means a restart silently takes
+   * the instance offline, and this one is fronted by a public endpoint -- so a host reboot or
+   * the watchdog recovering a wedged process all looked like an outage even though the
+   * WhatsApp credentials on disk were still perfectly valid.
+   *
+   * Only sessions that were actually mid-flight are resumed, so one the operator had
+   * deliberately stopped stays stopped. Failures are logged and swallowed: a session that
+   * cannot come back must not stop the API from serving traffic.
+   */
+  private async resumeSessionsAfterRestart(resumable: Session[]): Promise<void> {
+    if (resumable.length === 0) {
+      return;
+    }
+
+    if (process.env.SESSION_AUTOSTART === 'false') {
+      this.logger.log('Session autostart disabled by SESSION_AUTOSTART=false', {
+        action: 'startup_resume_skipped',
+        sessions: resumable.map(s => s.name),
+      });
+      return;
+    }
+
+    this.logger.log(`Resuming ${resumable.length} session(s) that were live before restart`, {
+      action: 'startup_resume',
+      sessions: resumable.map(s => s.name),
+    });
+
+    for (const session of resumable) {
+      try {
+        await this.start(session.id);
+        this.logger.log(`Resumed session ${session.name}`, {
+          action: 'startup_resume_ok',
+          sessionId: session.id,
+        });
+      } catch (error) {
+        this.logger.error(`Could not resume session ${session.name} on startup`, String(error), {
+          action: 'startup_resume_failed',
+          sessionId: session.id,
+        });
+      }
     }
   }
 

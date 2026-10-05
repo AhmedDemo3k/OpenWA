@@ -414,6 +414,7 @@ describe('SessionService', () => {
 
   describe('onModuleInit', () => {
     it('should reset active sessions to DISCONNECTED on startup', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
       (repository.update as jest.Mock).mockResolvedValue({ affected: 3 });
 
       await service.onModuleInit();
@@ -421,6 +422,81 @@ describe('SessionService', () => {
       expect(repository.update).toHaveBeenCalledWith(expect.objectContaining({ status: expect.anything() as string }), {
         status: SessionStatus.DISCONNECTED,
       });
+    });
+  });
+
+  // A restart used to leave every session DISCONNECTED and stay that way, so a reboot or a
+  // watchdog recovery took the gateway offline even though the stored credentials were
+  // still valid. This instance is served over a public endpoint, where that reads as an
+  // outage.
+  describe('autostart on boot', () => {
+    const live = { id: 'id-1', name: 'smoke-83107' } as Session;
+
+    it('restarts the sessions that were live before the process went down', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([live]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const start = jest.spyOn(service, 'start').mockResolvedValue(undefined as never);
+
+      await service.onModuleInit();
+
+      expect(start).toHaveBeenCalledWith('id-1');
+    });
+
+    it('reads the live sessions BEFORE the reset, or the list is always empty', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([live]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const start = jest.spyOn(service, 'start').mockResolvedValue(undefined as never);
+
+      await service.onModuleInit();
+
+      const findOrder = (repository.find as jest.Mock).mock.invocationCallOrder[0];
+      const updateOrder = (repository.update as jest.Mock).mock.invocationCallOrder[0];
+      expect(findOrder).toBeLessThan(updateOrder);
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves an intentionally stopped session stopped', async () => {
+      // only sessions persisted as live come back; DISCONNECTED is not in the query
+      (repository.find as jest.Mock).mockResolvedValue([]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 0 });
+      const start = jest.spyOn(service, 'start').mockResolvedValue(undefined as never);
+
+      await service.onModuleInit();
+
+      expect(start).not.toHaveBeenCalled();
+    });
+
+    it('honours SESSION_AUTOSTART=false', async () => {
+      process.env.SESSION_AUTOSTART = 'false';
+      (repository.find as jest.Mock).mockResolvedValue([live]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const start = jest.spyOn(service, 'start').mockResolvedValue(undefined as never);
+
+      await service.onModuleInit();
+
+      expect(start).not.toHaveBeenCalled();
+      delete process.env.SESSION_AUTOSTART;
+    });
+
+    it('still starts the other sessions when one fails to resume', async () => {
+      const second = { id: 'id-2', name: 'other' } as Session;
+      (repository.find as jest.Mock).mockResolvedValue([live, second]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 2 });
+      const start = jest
+        .spyOn(service, 'start')
+        .mockRejectedValueOnce(new Error('chromium exploded'))
+        .mockResolvedValueOnce(undefined as never);
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      expect(start).toHaveBeenCalledTimes(2);
+    });
+
+    it('completes the reset even when the autostart query fails', async () => {
+      (repository.find as jest.Mock).mockRejectedValue(new Error('db locked'));
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      expect(repository.update).toHaveBeenCalled();
     });
   });
 

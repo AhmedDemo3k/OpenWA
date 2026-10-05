@@ -50,25 +50,27 @@ export class AuthService implements OnModuleInit {
     // Seed a default API key if none exist
     const count = await this.apiKeyRepository.count();
     const isProduction = process.env.NODE_ENV === 'production';
-    let displayKey: string;
-    let isNewKey = false;
+    // Only ever populated when a key was just created or rotated. On a normal restart there
+    // is nothing new to show, and that is the common case.
+    let freshKey: string | undefined;
+    let keyFilePath: string | undefined;
 
     if (count === 0) {
       // Use predictable key in development, random key in production
-      displayKey = isProduction ? this.generateKey() : DEV_API_KEY;
+      freshKey = isProduction ? this.generateKey() : DEV_API_KEY;
 
-      await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
-      isNewKey = true;
+      await this.seedApiKey(freshKey, 'Default Admin Key', ApiKeyRole.ADMIN);
 
-      this.persistKeyFile(displayKey);
+      this.persistKeyFile(freshKey);
+      keyFilePath = this.apiKeyFilePath();
     } else {
       const rotation = await this.reconcileDevelopmentKey(isProduction);
 
       if (rotation.rotated) {
-        displayKey = rotation.rawKey!;
-        isNewKey = true;
+        freshKey = rotation.rawKey;
+        keyFilePath = this.apiKeyFilePath();
       } else {
-        displayKey = await this.readKeyFile();
+        keyFilePath = await this.currentKeyFilePath();
       }
     }
 
@@ -84,15 +86,55 @@ export class AuthService implements OnModuleInit {
     this.logger.log(`  📊 Dashboard: ${dashboardUrl}`);
     this.logger.log(`  📚 API Docs:  ${apiBaseUrl}/api/docs`);
     this.logger.log('');
-    if (isNewKey) {
-      this.logger.log('  🔑 API Key (newly created):');
+
+    if (freshKey) {
+      // Deliberately the only place the raw value is ever emitted. It is printed because
+      // there is no other way to learn a key that was just generated; the operator is
+      // expected to move it into a secret store and rotate it.
+      this.logger.log('  🔑 API Key (newly created -- store it now, it is not shown again):');
+      this.logger.log(`     ${freshKey}`);
+    } else if (keyFilePath) {
+      // Printing the existing key here put the live admin credential in the log file on
+      // every restart. The file it lives in already holds the same secret, so pointing at
+      // it costs nothing and stops the log from becoming a credential store.
+      this.logger.log('  🔑 API Key: unchanged (stored in the key file)');
+      this.logger.log(`     ${keyFilePath}`);
+      // Only used to warn when the file has drifted away from the database, e.g. the key
+      // was rotated through the API and never rewritten to disk.
+      const fileKey = await this.readKeyFile();
+      if (!fileKey) {
+        this.logger.warn(
+          'API key file does not match any active key. A key may have been rotated without ' +
+            'updating the file, so the file will 401. Update it or unset AUTH_KEY_FILE.',
+          { action: 'api_key_file_stale' },
+        );
+      }
     } else {
-      this.logger.log('  🔑 API Key:');
+      this.logger.log('  🔑 API Key: managed through the API; no key file is configured');
     }
-    this.logger.log(`     ${displayKey}`);
+
     this.logger.log('');
     this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     this.logger.log('');
+  }
+
+  private apiKeyFilePath(): string {
+    return apiKeyFilePath();
+  }
+
+  // Resolves the key file that actually authenticates right now, or undefined when none is
+  // configured or the configured one does not match the database. Used only to print a path,
+  // never to reveal a secret.
+  private async currentKeyFilePath(): Promise<string | undefined> {
+    const configured = this.apiKeyFilePath();
+
+    try {
+      const raw = readFileSync(configured, 'utf-8').trim();
+      const match = await this.apiKeyRepository.findOne({ where: { keyHash: this.hashKey(raw) } });
+      return match ? configured : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async seedApiKey(rawKey: string, name: string, role: ApiKeyRole): Promise<ApiKey> {
@@ -239,16 +281,18 @@ export class AuthService implements OnModuleInit {
   }
 
   /**
-   * Read the last key we printed, but never hand back a secret that no longer works.
+   * Reports whether the key file still holds a credential that works.
    *
    * The file is written once at seed time and is not updated when a key is deleted or
-   * rotated, so it drifts out of sync. Printing a stale secret makes the banner actively
-   * misleading -- it shows a credential that gets 401 -- so we only echo a file whose hash
-   * still matches a live key in the database.
+   * rotated, so it drifts out of sync. This is only ever used to decide whether to warn:
+   * the caller prints the file's *path*, never its contents, because this instance is
+   * reachable from the internet and a key in the log file is a published credential.
+   *
+   * Returns the raw key when it is still valid, otherwise an empty string.
    */
   private async readKeyFile(): Promise<string> {
     if (!existsSync(apiKeyFilePath())) {
-      return '(check dashboard for keys)';
+      return '';
     }
 
     let rawKey: string;
@@ -256,21 +300,14 @@ export class AuthService implements OnModuleInit {
       rawKey = readFileSync(apiKeyFilePath(), 'utf-8').trim();
     } catch (error) {
       this.logger.warn(`Failed to read API key file: ${apiKeyFilePath()}`, { error: String(error) });
-      return '(check dashboard for keys)';
+      return '';
     }
 
     const match = await this.apiKeyRepository.findOne({
       where: { keyHash: this.hashKey(rawKey), isActive: true },
     });
 
-    if (!match) {
-      this.logger.warn('Saved API key file does not match any active key; not displaying it', {
-        action: 'api_key_file_stale',
-      });
-      return '(check dashboard for keys)';
-    }
-
-    return rawKey;
+    return match ? rawKey : '';
   }
 
   /**
