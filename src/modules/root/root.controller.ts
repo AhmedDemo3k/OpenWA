@@ -1,13 +1,30 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Header, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { resolveDashboardIndex } from '../../common/utils/dashboard-dist';
 import { Public } from '../auth/decorators/auth.decorators';
 
 @Controller()
 export class RootController {
+  /**
+   * The dashboard, when it has been built.
+   *
+   * It used to redirect to DASHBOARD_URL instead, which pointed at a second port with
+   * nothing listening behind it, so the link was a dead end. Serving the same SPA from here
+   * means the landing URL a user actually types is the working dashboard. If the build is
+   * missing, fall through to the API-only page rather than a blank screen.
+   */
   @Public()
   @Get()
-  getRoot(): string {
-    const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:2886';
-    return `<!DOCTYPE html>
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  getRoot(@Res() res: Response): void {
+    const indexFile = resolveDashboardIndex();
+
+    if (indexFile) {
+      res.sendFile(indexFile);
+      return;
+    }
+
+    res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -29,13 +46,15 @@ export class RootController {
   <div class="card">
     <h1>OpenWA</h1>
     <p>Open Source WhatsApp API Gateway</p>
-    <a href="${dashboardUrl}">Open Dashboard</a>
     <div class="links">
       <a href="/api/docs">API Docs</a>
       <a href="/api/health">Health Check</a>
     </div>
+    <p style="margin-top:1.5rem;font-size:0.8rem;opacity:0.6">
+      Dashboard not built. Run: <code>npm --prefix dashboard run build</code>
+    </p>
   </div>
 </body>
-</html>`;
+</html>`);
   }
 }

@@ -73,13 +73,32 @@ describe('HTTP surface (e2e)', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it('/ (GET) serves the landing page linking to the API docs', async () => {
+  it('/ (GET) serves HTML with the dashboard mount point', async () => {
     const response = await request(httpServer(app)).get('/').expect(200);
 
     expect(response.headers['content-type']).toMatch(/text\/html/);
-    expect(response.text).toContain('OpenWA');
-    // The landing page is only useful if it actually points at the docs and health routes.
-    expect(response.text).toContain('/api/docs');
+    // Whether this is the built SPA or the API-only fallback page, the user must land on a
+    // real document. This assertion used to check for a link to /api/docs, which only
+    // existed on the fallback page and silently stopped testing anything once the dashboard
+    // started being served from `/`.
+    expect(response.text).toContain('<div id="root">');
+  });
+
+  it('/ (GET) serves the built dashboard when one is present', async () => {
+    // Builds a throwaway dashboard bundle so the SPA branch is exercised without depending on
+    // the developer having run `npm --prefix dashboard run build`.
+    const distDir = path.join(tmpRoot, 'dashboard-dist');
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(distDir, 'index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+    );
+    process.env.DASHBOARD_DIR = distDir;
+
+    const response = await request(httpServer(app)).get('/').expect(200);
+
+    expect(response.text).toContain('<div id="root">');
+    delete process.env.DASHBOARD_DIR;
   });
 
   it('/api/health (GET) reports liveness without touching dependencies', async () => {
@@ -114,22 +133,33 @@ describe('HTTP surface (e2e)', () => {
 
   it('the path the healthcheck and watchdog poll is a real, live route', async () => {
     // Guards the wiring rather than the endpoint: Dockerfile, docker-compose.yml,
-    // docker-compose.dev.yml and watchdog.js all poll this exact URL and act on the status
-    // code. They were previously pointed at the liveness route, which always answers 200, so
-    // a wedged process looked healthy and nothing ever restarted it.
+    // docker-compose.dev.yml and deploy/watch-openwa.ps1 all poll this exact URL and act on
+    // the status code. They were previously pointed at the liveness route, which always
+    // answers 200, so a wedged process looked healthy and nothing ever restarted it.
+    //
+    // watchdog.js was removed in dd2b769: it predated deploy/watch-openwa.ps1, which is what
+    // the OpenWA scheduled task actually runs. The list below must name only files that exist,
+    // or this test fails on a missing path instead of on a real regression.
     const healthcheck = await request(httpServer(app)).get('/api/health/ready').expect(200);
 
     // The check is `statusCode === 200`, so a body-only failure indicator would be ignored.
     expect(healthcheck.status).toBe(200);
     expect(bodyOf<ReadinessBody>(healthcheck).status).toBe('ok');
 
-    for (const file of ['Dockerfile', 'docker-compose.yml', 'docker-compose.dev.yml', 'watchdog.js']) {
-      const contents = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    const supervisors = ['Dockerfile', 'docker-compose.yml', 'docker-compose.dev.yml', 'deploy/watch-openwa.ps1'];
+
+    for (const relPath of supervisors) {
+      const absolute = path.join(__dirname, '..', relPath);
+      if (!fs.existsSync(absolute)) {
+        throw new Error(`${relPath} is referenced here but does not exist`);
+      }
+
+      const contents = fs.readFileSync(absolute, 'utf8');
       if (!contents.includes('/api/health/ready')) {
-        throw new Error(`${file} does not poll /api/health/ready; it would never detect a wedged instance`);
+        throw new Error(`${relPath} does not poll /api/health/ready; it would never detect a wedged instance`);
       }
       if (/localhost:2785\/api\/health'/.test(contents)) {
-        throw new Error(`${file} still polls the liveness route, which always returns 200`);
+        throw new Error(`${relPath} still polls the liveness route, which always returns 200`);
       }
     }
   });

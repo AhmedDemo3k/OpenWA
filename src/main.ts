@@ -1,12 +1,55 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
+import { resolveDashboardIndex } from './common/utils/dashboard-dist';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
+
+/**
+ * Serves the built dashboard from this same process.
+ *
+ * The dashboard is a Vite SPA that calls `/api` with a relative path, so it only works when
+ * it is served from the same origin as the API. Previously it ran as a second Vite dev
+ * server on port 2886, which meant a second thing to start, a second port to map through
+ * Tailscale Funnel, and a CORS exemption between them. None of that was set up on this
+ * host, so the funnel URL resolved to the API, the API's landing page advertised a
+ * dashboard port with nothing behind it, and following that link produced a blank page with
+ * no way to enter an API key.
+ *
+ * One origin removes the whole class of problem. If `dashboard/dist` is absent the API still
+ * boots and simply keeps serving the API-only landing page.
+ */
+function mountDashboard(app: NestExpressApplication): boolean {
+  const indexFile = resolveDashboardIndex();
+
+  if (!indexFile) {
+    console.warn(
+      '[Dashboard] No dashboard build found; serving API only. ' +
+        'Run "npm --prefix dashboard run build" to enable it.',
+    );
+    return false;
+  }
+
+  const distDir = path.dirname(indexFile);
+
+  // Serve the hashed assets first. Everything else that is not an /api route falls through
+  // to index.html so client-side routes survive a refresh.
+  app.useStaticAssets(distDir, { index: false, redirect: false });
+
+  app.use((req: { path: string; url: string }, res: { sendFile: (p: string) => void }, next: () => void) => {
+    if (req.path.startsWith('/api')) return next();
+    if (req.path.includes('.')) return next(); // a missing asset is a real 404, not the SPA
+    return res.sendFile(indexFile);
+  });
+
+  console.log(`[Dashboard] Serving dashboard build from ${distDir}`);
+  return true;
+}
 
 /**
  * Waits until everything already written to a stdio stream has actually reached the OS.
@@ -89,7 +132,7 @@ STORAGE_PATH=./data/media
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Enable shutdown hooks for graceful shutdown
   app.enableShutdownHooks();
@@ -240,11 +283,18 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
+  // Must come after the global prefix is set, so the /api guard below matches the real
+  // route the Swagger middleware registered.
+  const dashboardMounted = mountDashboard(app);
+
   const port = process.env.PORT || 2785;
   await app.listen(port);
 
   console.log(`🚀 OpenWA is running on: http://localhost:${port}`);
   console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+  if (dashboardMounted) {
+    console.log(`🖥️  Dashboard:   http://localhost:${port}/`);
+  }
 }
 
 // A boot failure (EADDRINUSE, bad DATABASE_*, migration error) must not surface as a
