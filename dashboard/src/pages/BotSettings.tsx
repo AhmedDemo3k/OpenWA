@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { Settings2, Sparkles, FileCode, Download, Upload, Keyboard, Database, Loader2, Search, CheckSquare, Square } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../components/Toast';
@@ -54,7 +54,7 @@ export default function BotSettings() {
   );
 }
 
-// ══════════════════════ GENERAL TAB ══════════════════════
+// â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ GENERAL TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
 function GeneralTab({ t, toast }: { t: any; toast: any }) {
   const [stats, setStats] = useState<any>(null);
   const [config, setConfig] = useState<any>(null);
@@ -122,7 +122,7 @@ function GeneralTab({ t, toast }: { t: any; toast: any }) {
             <div className="form-field">
               <label>{t('botSettings.general.apiKey')}</label>
               <input
-                type="password" placeholder={config?.gemini?.hasKey ? '••••••••' + ' (leave blank to keep)' : 'Enter Gemini API key'}
+                type="password" placeholder={config?.gemini?.hasKey ? 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' + ' (leave blank to keep)' : 'Enter Gemini API key'}
                 value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
               />
             </div>
@@ -141,7 +141,7 @@ function GeneralTab({ t, toast }: { t: any; toast: any }) {
             <div className="form-field">
               <label>{t('botSettings.general.apiKey')}</label>
               <input
-                type="password" placeholder={config?.openai?.hasKey ? '••••••••' + ' (leave blank to keep)' : 'Enter OpenAI API key'}
+                type="password" placeholder={config?.openai?.hasKey ? 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢' + ' (leave blank to keep)' : 'Enter OpenAI API key'}
                 value={openaiKey} onChange={e => setOpenaiKey(e.target.value)}
               />
             </div>
@@ -202,7 +202,7 @@ function GeneralTab({ t, toast }: { t: any; toast: any }) {
   );
 }
 
-// ══════════════════════ EXTRACT TAB ══════════════════════
+// â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ EXTRACT TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
 
 interface ChatInfo {
   id: string;
@@ -336,7 +336,7 @@ function ExtractTab({ extractStatus, setExtractStatus, uploadText, setUploadText
           >
             {sessions.map(s => (
               <option key={s.id} value={s.id}>
-                {s.id} {s.port ? '🟢' : '🔴'}
+                {s.id} {s.port ? 'ًںں¢' : 'ًں”´'}
               </option>
             ))}
           </select>
@@ -434,8 +434,12 @@ function ExtractTab({ extractStatus, setExtractStatus, uploadText, setUploadText
   );
 }
 
-// ══════════════════════ STYLE TAB ══════════════════════
-function StyleTab({ t, extractStatus, toast }: any) {
+// â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ STYLE TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+// `t` and `extractStatus` are accepted for symmetry with the other tabs; this one is
+// hardcoded Arabic rather than routed through i18n.
+// `t` is accepted for symmetry with the other tabs; this one is hardcoded Arabic rather than
+// routed through i18n.
+function StyleTab({ extractStatus, toast }: any) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -446,11 +450,11 @@ function StyleTab({ t, extractStatus, toast }: any) {
   const [customInstructions, setCustomInstructions] = useState('');
 
   const presets = [
-    { label: 'رسمي', icon: '🎩', formality: 'رسمي', length: 'medium', emoji: 'نادراً', desc: 'لغة رسمية ومهذبة' },
-    { label: 'ودود', icon: '🤝', formality: 'شبه رسمي', length: 'medium', emoji: 'أحياناً', desc: 'لغة طبيعية ولطيفة' },
-    { label: 'عفوي', icon: '😄', formality: 'عامي', length: 'short', emoji: 'كثيراً', desc: 'مثل صديق تتكلم معاه' },
-    { label: 'مختصر', icon: '⚡', formality: 'عامي', length: 'short', emoji: 'بدون', desc: 'ردود قصيرة وبدون زوائد' },
-    { label: 'تلقائي', icon: '⟳', formality: 'auto', length: 'auto', emoji: 'auto', desc: 'حسب تحليل الأسلوب' },
+    { label: 'ط±ط³ظ…ظٹ', icon: 'ًںژ©', formality: 'ط±ط³ظ…ظٹ', length: 'medium', emoji: 'ظ†ط§ط¯ط±ط§ظ‹', desc: 'ظ„ط؛ط© ط±ط³ظ…ظٹط© ظˆظ…ظ‡ط°ط¨ط©' },
+    { label: 'ظˆط¯ظˆط¯', icon: 'ًں¤‌', formality: 'ط´ط¨ظ‡ ط±ط³ظ…ظٹ', length: 'medium', emoji: 'ط£ط­ظٹط§ظ†ط§ظ‹', desc: 'ظ„ط؛ط© ط·ط¨ظٹط¹ظٹط© ظˆظ„ط·ظٹظپط©' },
+    { label: 'ط¹ظپظˆظٹ', icon: 'ًںک„', formality: 'ط¹ط§ظ…ظٹ', length: 'short', emoji: 'ظƒط«ظٹط±ط§ظ‹', desc: 'ظ…ط«ظ„ طµط¯ظٹظ‚ طھطھظƒظ„ظ… ظ…ط¹ط§ظ‡' },
+    { label: 'ظ…ط®طھطµط±', icon: 'âڑ،', formality: 'ط¹ط§ظ…ظٹ', length: 'short', emoji: 'ط¨ط¯ظˆظ†', desc: 'ط±ط¯ظˆط¯ ظ‚طµظٹط±ط© ظˆط¨ط¯ظˆظ† ط²ظˆط§ط¦ط¯' },
+    { label: 'طھظ„ظ‚ط§ط¦ظٹ', icon: 'âں³', formality: 'auto', length: 'auto', emoji: 'auto', desc: 'ط­ط³ط¨ طھط­ظ„ظٹظ„ ط§ظ„ط£ط³ظ„ظˆط¨' },
   ];
 
   const applyPreset = (p: typeof presets[0]) => {
@@ -496,13 +500,13 @@ function StyleTab({ t, extractStatus, toast }: any) {
       }).then(r => r.json());
 
       if (res.success) {
-        toast.success('تم حفظ إعدادات الأسلوب ✓', '');
-        setData(prev => ({ ...prev, overrides: res.overrides, systemPrompt: res.systemPrompt }));
+        toast.success('طھظ… ط­ظپط¸ ط¥ط¹ط¯ط§ط¯ط§طھ ط§ظ„ط£ط³ظ„ظˆط¨ âœ“', '');
+        setData((prev: any) => ({ ...prev, overrides: res.overrides, systemPrompt: res.systemPrompt }));
         setDirty(false);
       } else {
-        toast.error(res.error || 'حصل خطأ في الحفظ', '');
+        toast.error(res.error || 'ط­طµظ„ ط®ط·ط£ ظپظٹ ط§ظ„ط­ظپط¸', '');
       }
-    } catch { toast.error('حصل خطأ في الحفظ', ''); }
+    } catch { toast.error('ط­طµظ„ ط®ط·ط£ ظپظٹ ط§ظ„ط­ظپط¸', ''); }
     setSaving(false);
   };
 
@@ -513,20 +517,20 @@ function StyleTab({ t, extractStatus, toast }: any) {
     const match = presets.find(p =>
       p.formality === formality && p.length === responseLength && p.emoji === emojiUsage
     );
-    return match ? match.label : 'مخصص';
+    return match ? match.label : 'ظ…ط®طµطµ';
   };
 
-  if (loading) return <div className="loading"><Loader2 className="animate-spin" size={18} /> تحليل الأسلوب...</div>;
+  if (loading) return <div className="loading"><Loader2 className="animate-spin" size={18} /> طھط­ظ„ظٹظ„ ط§ظ„ط£ط³ظ„ظˆط¨...</div>;
 
   return (
     <div>
-      {/* ─── Presets ─── */}
+      {/* â”€â”€â”€ Presets â”€â”€â”€ */}
       <div className="tab-section">
         <div className="section-header">
-          <h3 className="section-title">إعدادات الأسلوب</h3>
+          <h3 className="section-title">ط¥ط¹ط¯ط§ط¯ط§طھ ط§ظ„ط£ط³ظ„ظˆط¨</h3>
           <div className="section-actions">
             <button className="btn-secondary btn-sm" onClick={() => loadStyle(true)} disabled={loading}>
-              <Sparkles size={14} /> إعادة التحليل
+              <Sparkles size={14} /> ط¥ط¹ط§ط¯ط© ط§ظ„طھط­ظ„ظٹظ„
             </button>
           </div>
         </div>
@@ -545,85 +549,85 @@ function StyleTab({ t, extractStatus, toast }: any) {
           ))}
         </div>
 
-        {/* ─── Controls Grid ─── */}
+        {/* â”€â”€â”€ Controls Grid â”€â”€â”€ */}
         <div className="style-controls-grid">
           <div className="style-control-card">
             <div className="style-control-header">
-              <span className="style-control-label">مستوى الرسمية</span>
+              <span className="style-control-label">ظ…ط³طھظˆظ‰ ط§ظ„ط±ط³ظ…ظٹط©</span>
               {formality !== 'auto' && (
-                <button className="btn-icon-xs" onClick={() => { setFormality('auto'); markDirty(); }} title="إعادة للتلقائي">
-                  ⟳
+                <button className="btn-icon-xs" onClick={() => { setFormality('auto'); markDirty(); }} title="ط¥ط¹ط§ط¯ط© ظ„ظ„طھظ„ظ‚ط§ط¦ظٹ">
+                  âں³
                 </button>
               )}
             </div>
             <select className="style-select" value={formality} onChange={e => { setFormality(e.target.value); markDirty(); }}>
-              <option value="auto">⟳ تلقائي</option>
-              <option value="رسمي">🎩 رسمي</option>
-              <option value="شبه رسمي">🤝 شبه رسمي</option>
-              <option value="عامي">😄 عامي</option>
+              <option value="auto">âں³ طھظ„ظ‚ط§ط¦ظٹ</option>
+              <option value="ط±ط³ظ…ظٹ">ًںژ© ط±ط³ظ…ظٹ</option>
+              <option value="ط´ط¨ظ‡ ط±ط³ظ…ظٹ">ًں¤‌ ط´ط¨ظ‡ ط±ط³ظ…ظٹ</option>
+              <option value="ط¹ط§ظ…ظٹ">ًںک„ ط¹ط§ظ…ظٹ</option>
             </select>
             {fp && fp.formality && formality === 'auto' && (
-              <div className="style-auto-hint">تحليل: <span className={`badge-${fp.formality === 'رسمي' ? 'formal' : fp.formality === 'عامي' ? 'informal' : 'medium'}`}>{fp.formality}</span></div>
+              <div className="style-auto-hint">طھط­ظ„ظٹظ„: <span className={`badge-${fp.formality === 'ط±ط³ظ…ظٹ' ? 'formal' : fp.formality === 'ط¹ط§ظ…ظٹ' ? 'informal' : 'medium'}`}>{fp.formality}</span></div>
             )}
           </div>
 
           <div className="style-control-card">
             <div className="style-control-header">
-              <span className="style-control-label">طول الرد</span>
+              <span className="style-control-label">ط·ظˆظ„ ط§ظ„ط±ط¯</span>
               {responseLength !== 'auto' && (
-                <button className="btn-icon-xs" onClick={() => { setResponseLength('auto'); markDirty(); }} title="إعادة للتلقائي">⟳</button>
+                <button className="btn-icon-xs" onClick={() => { setResponseLength('auto'); markDirty(); }} title="ط¥ط¹ط§ط¯ط© ظ„ظ„طھظ„ظ‚ط§ط¦ظٹ">âں³</button>
               )}
             </div>
             <select className="style-select" value={responseLength} onChange={e => { setResponseLength(e.target.value); markDirty(); }}>
-              <option value="auto">⟳ تلقائي</option>
-              <option value="short">قصير (جملة)</option>
-              <option value="medium">متوسط (جملتين-ثلاث)</option>
-              <option value="long">طويل (فقرة)</option>
+              <option value="auto">âں³ طھظ„ظ‚ط§ط¦ظٹ</option>
+              <option value="short">ظ‚طµظٹط± (ط¬ظ…ظ„ط©)</option>
+              <option value="medium">ظ…طھظˆط³ط· (ط¬ظ…ظ„طھظٹظ†-ط«ظ„ط§ط«)</option>
+              <option value="long">ط·ظˆظٹظ„ (ظپظ‚ط±ط©)</option>
             </select>
             {fp && responseLength === 'auto' && (
-              <div className="style-auto-hint">تحليل: {fp.avgMessageWords || fp.avgResponseLength} كلمات</div>
+              <div className="style-auto-hint">طھط­ظ„ظٹظ„: {fp.avgMessageWords || fp.avgResponseLength} ظƒظ„ظ…ط§طھ</div>
             )}
           </div>
 
           <div className="style-control-card">
             <div className="style-control-header">
-              <span className="style-control-label">الإيموجيز</span>
+              <span className="style-control-label">ط§ظ„ط¥ظٹظ…ظˆط¬ظٹط²</span>
               {emojiUsage !== 'auto' && (
-                <button className="btn-icon-xs" onClick={() => { setEmojiUsage('auto'); markDirty(); }} title="إعادة للتلقائي">⟳</button>
+                <button className="btn-icon-xs" onClick={() => { setEmojiUsage('auto'); markDirty(); }} title="ط¥ط¹ط§ط¯ط© ظ„ظ„طھظ„ظ‚ط§ط¦ظٹ">âں³</button>
               )}
             </div>
             <select className="style-select" value={emojiUsage} onChange={e => { setEmojiUsage(e.target.value); markDirty(); }}>
-              <option value="auto">⟳ تلقائي</option>
-              <option value="كثيراً">كثيراً 😄</option>
-              <option value="أحياناً">أحياناً 🙂</option>
-              <option value="نادراً">نادراً 😐</option>
-              <option value="بدون">بدون 🚫</option>
+              <option value="auto">âں³ طھظ„ظ‚ط§ط¦ظٹ</option>
+              <option value="ظƒط«ظٹط±ط§ظ‹">ظƒط«ظٹط±ط§ظ‹ ًںک„</option>
+              <option value="ط£ط­ظٹط§ظ†ط§ظ‹">ط£ط­ظٹط§ظ†ط§ظ‹ ًں™‚</option>
+              <option value="ظ†ط§ط¯ط±ط§ظ‹">ظ†ط§ط¯ط±ط§ظ‹ ًںکگ</option>
+              <option value="ط¨ط¯ظˆظ†">ط¨ط¯ظˆظ† ًںڑ«</option>
             </select>
             {fp && emojiUsage === 'auto' && (
-              <div className="style-auto-hint">تحليل: {fp.emojiUsage?.usage || '—'} ({fp.emojiUsage?.avgPerMessage?.toFixed(1) || '0'}/msg)</div>
+              <div className="style-auto-hint">طھط­ظ„ظٹظ„: {fp.emojiUsage?.usage || 'â€”'} ({fp.emojiUsage?.avgPerMessage?.toFixed(1) || '0'}/msg)</div>
             )}
           </div>
 
           <div className="style-control-card">
-            <span className="style-control-label">اللغة</span>
-            <div className="style-control-readonly">{fp ? fp.languageMix?.dominant || '?' : '—'}</div>
+            <span className="style-control-label">ط§ظ„ظ„ط؛ط©</span>
+            <div className="style-control-readonly">{fp ? fp.languageMix?.dominant || '?' : 'â€”'}</div>
             {fp?.languageMix && (
               <div className="style-auto-hint">
-                <span className="lang-bar"><span className="lang-bar-ar" style={{width: `${fp.languageMix.arabicPercent}%`}} /> عربي {fp.languageMix.arabicPercent}%</span>
-                <span className="lang-bar"><span className="lang-bar-en" style={{width: `${fp.languageMix.englishPercent}%`}} /> إنجليزي {fp.languageMix.englishPercent}%</span>
+                <span className="lang-bar"><span className="lang-bar-ar" style={{width: `${fp.languageMix.arabicPercent}%`}} /> ط¹ط±ط¨ظٹ {fp.languageMix.arabicPercent}%</span>
+                <span className="lang-bar"><span className="lang-bar-en" style={{width: `${fp.languageMix.englishPercent}%`}} /> ط¥ظ†ط¬ظ„ظٹط²ظٹ {fp.languageMix.englishPercent}%</span>
               </div>
             )}
           </div>
 
           <div className="style-control-card">
-            <span className="style-control-label">الرسائل المحللة</span>
-            <div className="style-control-readonly">{fp ? fp.messagesAnalyzed : '—'}</div>
-            {fp && <div className="style-auto-hint">إجمالي المحادثات: {fp.totalConversations || '—'}</div>}
+            <span className="style-control-label">ط§ظ„ط±ط³ط§ط¦ظ„ ط§ظ„ظ…ط­ظ„ظ„ط©</span>
+            <div className="style-control-readonly">{fp ? fp.messagesAnalyzed : 'â€”'}</div>
+            {fp && <div className="style-auto-hint">ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ظ…ط­ط§ط¯ط«ط§طھ: {fp.totalConversations || 'â€”'}</div>}
           </div>
 
           <div className="style-control-card">
-            <span className="style-control-label">علامات الترقيم</span>
-            <div className="style-control-readonly">{fp?.punctuation?.dominant || '—'}</div>
+            <span className="style-control-label">ط¹ظ„ط§ظ…ط§طھ ط§ظ„طھط±ظ‚ظٹظ…</span>
+            <div className="style-control-readonly">{fp?.punctuation?.dominant || 'â€”'}</div>
             {fp?.punctuation && (
               <div className="style-punct-bars">
                 <span>. {fp.punctuation.period}%</span>
@@ -634,63 +638,63 @@ function StyleTab({ t, extractStatus, toast }: any) {
           </div>
         </div>
 
-        {/* ─── Custom Instructions ─── */}
+        {/* â”€â”€â”€ Custom Instructions â”€â”€â”€ */}
         <div className="style-instructions-section">
-          <label className="style-control-label">تعليمات إضافية</label>
+          <label className="style-control-label">طھط¹ظ„ظٹظ…ط§طھ ط¥ط¶ط§ظپظٹط©</label>
           <textarea
             className="style-instructions-input"
-            placeholder='"استخدم لغة ودية", "تجنب المصطلحات التقنية", "أضف دعاء في نهاية الرد"...'
+            placeholder='"ط§ط³طھط®ط¯ظ… ظ„ط؛ط© ظˆط¯ظٹط©", "طھط¬ظ†ط¨ ط§ظ„ظ…طµط·ظ„ط­ط§طھ ط§ظ„طھظ‚ظ†ظٹط©", "ط£ط¶ظپ ط¯ط¹ط§ط، ظپظٹ ظ†ظ‡ط§ظٹط© ط§ظ„ط±ط¯"...'
             value={customInstructions}
             onChange={e => { setCustomInstructions(e.target.value); markDirty(); }}
             rows={3}
           />
         </div>
 
-        {/* ─── Save ─── */}
+        {/* â”€â”€â”€ Save â”€â”€â”€ */}
         <div className="style-save-section">
           <button className="btn-primary" onClick={saveOverrides} disabled={saving || !dirty}>
             {saving ? <Loader2 className="animate-spin" size={16} /> : null}
-            {saving ? 'جاري الحفظ...' : dirty ? '💾 حفظ إعدادات الأسلوب' : '✓ تم الحفظ'}
+            {saving ? 'ط¬ط§ط±ظٹ ط§ظ„ط­ظپط¸...' : dirty ? 'ًں’¾ ط­ظپط¸ ط¥ط¹ط¯ط§ط¯ط§طھ ط§ظ„ط£ط³ظ„ظˆط¨' : 'âœ“ طھظ… ط§ظ„ط­ظپط¸'}
           </button>
-          {!dirty && <span className="style-saved-hint">جميع الإعدادات محفوظة</span>}
+          {!dirty && <span className="style-saved-hint">ط¬ظ…ظٹط¹ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ ظ…ط­ظپظˆط¸ط©</span>}
         </div>
       </div>
 
-      {/* ─── Analyzed Data ─── */}
+      {/* â”€â”€â”€ Analyzed Data â”€â”€â”€ */}
       {fp && (
         <>
           <div className="tab-section">
-            <h3 className="section-title">التحيات</h3>
+            <h3 className="section-title">ط§ظ„طھط­ظٹط§طھ</h3>
             <div className="phrase-list">
               {(fp.commonGreetings || []).length > 0
                 ? fp.commonGreetings.map((g: string, i: number) => <span key={i} className="phrase-tag">{g}</span>)
-                : <span className="empty-state-sm">—</span>}
+                : <span className="empty-state-sm">â€”</span>}
             </div>
           </div>
 
           <div className="tab-section">
-            <h3 className="section-title">الختاميات</h3>
+            <h3 className="section-title">ط§ظ„ط®طھط§ظ…ظٹط§طھ</h3>
             <div className="phrase-list">
               {(fp.commonSignoffs || []).length > 0
                 ? fp.commonSignoffs.map((s: string, i: number) => <span key={i} className="phrase-tag">{s}</span>)
-                : <span className="empty-state-sm">—</span>}
+                : <span className="empty-state-sm">â€”</span>}
             </div>
           </div>
 
           <div className="tab-section">
-            <h3 className="section-title">العبارات المتكررة</h3>
+            <h3 className="section-title">ط§ظ„ط¹ط¨ط§ط±ط§طھ ط§ظ„ظ…طھظƒط±ط±ط©</h3>
             <div className="phrase-list">
               {(fp.topPhrases || []).length > 0
                 ? fp.topPhrases.slice(0, 8).map((p: any, i: number) => (
                     <span key={i} className="phrase-tag">{p.phrase} <small>{p.count}</small></span>
                   ))
-                : <span className="empty-state-sm">—</span>}
+                : <span className="empty-state-sm">â€”</span>}
             </div>
           </div>
 
           {fp.responseStyle && (
             <div className="tab-section">
-              <h3 className="section-title">أسلوب الرد</h3>
+              <h3 className="section-title">ط£ط³ظ„ظˆط¨ ط§ظ„ط±ط¯</h3>
               <p className="response-style">{fp.responseStyle}</p>
             </div>
           )}
@@ -699,9 +703,9 @@ function StyleTab({ t, extractStatus, toast }: any) {
           {data?.systemPrompt && (
             <div className="tab-section">
               <div className="section-header">
-                <h3 className="section-title">معاينة التعليمات</h3>
+                <h3 className="section-title">ظ…ط¹ط§ظٹظ†ط© ط§ظ„طھط¹ظ„ظٹظ…ط§طھ</h3>
                 <button className="btn-secondary btn-sm" onClick={saveOverrides} disabled={saving || !dirty}>
-                  تحديث المعاينة
+                  طھط­ط¯ظٹط« ط§ظ„ظ…ط¹ط§ظٹظ†ط©
                 </button>
               </div>
               <pre className="preview-text">{data.systemPrompt}</pre>
@@ -712,9 +716,9 @@ function StyleTab({ t, extractStatus, toast }: any) {
 
       {noData && (
         <div className="empty-state">
-          <p>مافيش بيانات أسلوب. استخرج محادثات أول أو ارفع ملف واتساب.</p>
+          <p>ظ…ط§ظپظٹط´ ط¨ظٹط§ظ†ط§طھ ط£ط³ظ„ظˆط¨. ط§ط³طھط®ط±ط¬ ظ…ط­ط§ط¯ط«ط§طھ ط£ظˆظ„ ط£ظˆ ط§ط±ظپط¹ ظ…ظ„ظپ ظˆط§طھط³ط§ط¨.</p>
           <button className="btn-primary" onClick={() => loadStyle(true)} disabled={loading}>
-            <Sparkles size={14} /> تحليل الأسلوب
+            <Sparkles size={14} /> طھط­ظ„ظٹظ„ ط§ظ„ط£ط³ظ„ظˆط¨
           </button>
         </div>
       )}
@@ -722,8 +726,9 @@ function StyleTab({ t, extractStatus, toast }: any) {
   );
 }
 
-// ══════════════════════ RULES TAB ══════════════════════
-function RulesTab({ t, toast }: any) {
+// â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ RULES TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+// `t` is accepted for symmetry with the other tabs; this one is hardcoded Arabic.
+function RulesTab({ toast }: any) {
   const [rules, setRules] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -746,15 +751,15 @@ function RulesTab({ t, toast }: any) {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ trigger: form.trigger, response: form.response, context: form.context }),
         }).then(r => r.json());
-        if (!res.error) { setRules(prev => prev.map(r => r.id === editId ? res : r)); toast.success('تم التعديل ✓', ''); resetForm(); }
+        if (!res.error) { setRules(prev => prev.map(r => r.id === editId ? res : r)); toast.success('طھظ… ط§ظ„طھط¹ط¯ظٹظ„ âœ“', ''); resetForm(); }
       } else {
         const res = await fetch('/bot-api/api/rules', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ trigger: form.trigger, response: form.response, context: form.context }),
         }).then(r => r.json());
-        if (!res.error) { setRules(prev => [...prev, res]); toast.success('تمت الإضافة ✓', ''); resetForm(); }
+        if (!res.error) { setRules(prev => [...prev, res]); toast.success('طھظ…طھ ط§ظ„ط¥ط¶ط§ظپط© âœ“', ''); resetForm(); }
       }
-    } catch { toast.error('حصل خطأ', ''); }
+    } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
   const toggleRule = async (id: string, enabled: boolean) => {
@@ -764,7 +769,7 @@ function RulesTab({ t, toast }: any) {
         body: JSON.stringify({ enabled: !enabled }),
       }).then(r => r.json());
       if (!res.error) setRules(prev => prev.map(r => r.id === id ? res : r));
-    } catch { toast.error('حصل خطأ', ''); }
+    } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
   const deleteRule = async (id: string) => {
@@ -772,11 +777,11 @@ function RulesTab({ t, toast }: any) {
       const res = await fetch(`/bot-api/api/rules/${id}`, { method: 'DELETE' }).then(r => r.json());
       if (res.removed) {
         setRules(prev => prev.filter(r => r.id !== id));
-        toast.success('تم الحذف ✓', '');
+        toast.success('طھظ… ط§ظ„ط­ط°ظپ âœ“', '');
       } else {
-        toast.error(res.error || 'فشل الحذف', '');
+        toast.error(res.error || 'ظپط´ظ„ ط§ظ„ط­ط°ظپ', '');
       }
-    } catch { toast.error('حصل خطأ', ''); }
+    } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
   const startEdit = (rule: any) => {
@@ -793,50 +798,50 @@ function RulesTab({ t, toast }: any) {
 
   return (
     <div>
-      {/* ─── Header ─── */}
+      {/* â”€â”€â”€ Header â”€â”€â”€ */}
       <div className="tab-section">
         <div className="section-header">
-          <h3 className="section-title">القواعد ({rules.length})</h3>
+          <h3 className="section-title">ط§ظ„ظ‚ظˆط§ط¹ط¯ ({rules.length})</h3>
           <button className={`btn-${showForm ? 'secondary' : 'primary'} btn-sm`} onClick={() => { resetForm(); setShowForm(!showForm); }}>
-            {showForm ? '✕ إلغاء' : '+ إضافة قاعدة'}
+            {showForm ? 'âœ• ط¥ظ„ط؛ط§ط،' : '+ ط¥ط¶ط§ظپط© ظ‚ط§ط¹ط¯ط©'}
           </button>
         </div>
 
-        {/* ─── Form ─── */}
+        {/* â”€â”€â”€ Form â”€â”€â”€ */}
         {showForm && (
           <div className="rule-form-card">
             <div className="rule-form-row">
               <div className="rule-form-field">
-                <label>كلمة الزناد (trigger)</label>
-                <input placeholder="مثال: كم السعر" value={form.trigger} onChange={e => setForm(prev => ({ ...prev, trigger: e.target.value }))} autoFocus />
+                <label>ظƒظ„ظ…ط© ط§ظ„ط²ظ†ط§ط¯ (trigger)</label>
+                <input placeholder="ظ…ط«ط§ظ„: ظƒظ… ط§ظ„ط³ط¹ط±" value={form.trigger} onChange={e => setForm(prev => ({ ...prev, trigger: e.target.value }))} autoFocus />
               </div>
               <div className="rule-form-field">
-                <label>الرد</label>
-                <input placeholder="مثال: السعر كذا" value={form.response} onChange={e => setForm(prev => ({ ...prev, response: e.target.value }))} />
+                <label>ط§ظ„ط±ط¯</label>
+                <input placeholder="ظ…ط«ط§ظ„: ط§ظ„ط³ط¹ط± ظƒط°ط§" value={form.response} onChange={e => setForm(prev => ({ ...prev, response: e.target.value }))} />
               </div>
             </div>
             <div className="rule-form-field">
-              <label>سياق (اختياري)</label>
-              <input placeholder="مثال: لو سأل عن السعر" value={form.context} onChange={e => setForm(prev => ({ ...prev, context: e.target.value }))} />
+              <label>ط³ظٹط§ظ‚ (ط§ط®طھظٹط§ط±ظٹ)</label>
+              <input placeholder="ظ…ط«ط§ظ„: ظ„ظˆ ط³ط£ظ„ ط¹ظ† ط§ظ„ط³ط¹ط±" value={form.context} onChange={e => setForm(prev => ({ ...prev, context: e.target.value }))} />
             </div>
             <div className="rule-form-actions">
               <button className="btn-primary btn-sm" onClick={saveRule} disabled={!form.trigger || !form.response}>
-                {editId ? '💾 حفظ التعديل' : '➕ إضافة القاعدة'}
+                {editId ? 'ًں’¾ ط­ظپط¸ ط§ظ„طھط¹ط¯ظٹظ„' : 'â‍• ط¥ط¶ط§ظپط© ط§ظ„ظ‚ط§ط¹ط¯ط©'}
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* ─── Search ─── */}
+      {/* â”€â”€â”€ Search â”€â”€â”€ */}
       {rules.length > 0 && (
         <div className="list-search" style={{ marginBottom: '0.75rem' }}>
-          <span className="list-search-icon">🔍</span>
-          <input placeholder="ابحث في القواعد..." value={search} onChange={e => setSearch(e.target.value)} />
+          <span className="list-search-icon">ًں”چ</span>
+          <input placeholder="ط§ط¨ط­ط« ظپظٹ ط§ظ„ظ‚ظˆط§ط¹ط¯..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
       )}
 
-      {/* ─── List ─── */}
+      {/* â”€â”€â”€ List â”€â”€â”€ */}
       {filtered.length > 0 ? (
         <div className="tab-section">
           <div className="rules-list">
@@ -848,39 +853,40 @@ function RulesTab({ t, toast }: any) {
                       <span className="rule-card-badge">if</span>
                       {r.trigger}
                     </div>
-                    <div className="rule-card-arrow">→</div>
+                    <div className="rule-card-arrow">â†’</div>
                     <div className="rule-card-response">{r.response}</div>
                   </div>
-                  {r.context && <div className="rule-card-context">📎 {r.context}</div>}
+                  {r.context && <div className="rule-card-context">ًں“ژ {r.context}</div>}
                 </div>
                 <div className="rule-card-actions">
                   <button
                     className={`toggle-btn ${r.enabled !== false ? 'on' : 'off'}`}
                     onClick={() => toggleRule(r.id, r.enabled !== false)}
-                    title={r.enabled !== false ? 'تعطيل' : 'تفعيل'}
+                    title={r.enabled !== false ? 'طھط¹ط·ظٹظ„' : 'طھظپط¹ظٹظ„'}
                   >
                     <span className="toggle-knob" />
                   </button>
-                  <button className="btn-icon-sm" onClick={() => startEdit(r)} title="تعديل">✏️</button>
-                  <button className="btn-icon-sm danger" onClick={() => deleteRule(r.id)} title="حذف">🗑️</button>
+                  <button className="btn-icon-sm" onClick={() => startEdit(r)} title="طھط¹ط¯ظٹظ„">âœڈï¸ڈ</button>
+                  <button className="btn-icon-sm danger" onClick={() => deleteRule(r.id)} title="ط­ط°ظپ">ًں—‘ï¸ڈ</button>
                 </div>
               </div>
             ))}
           </div>
         </div>
       ) : rules.length > 0 ? (
-        <div className="empty-state-sm">لا توجد نتائج للبحث "{search}"</div>
+        <div className="empty-state-sm">ظ„ط§ طھظˆط¬ط¯ ظ†طھط§ط¦ط¬ ظ„ظ„ط¨ط­ط« "{search}"</div>
       ) : (
         <div className="empty-state">
-          <p>مافيش قواعد مضافة. أضف قاعدة عشان البوت يرد تلقائياً على كلمات معينة.</p>
+          <p>ظ…ط§ظپظٹط´ ظ‚ظˆط§ط¹ط¯ ظ…ط¶ط§ظپط©. ط£ط¶ظپ ظ‚ط§ط¹ط¯ط© ط¹ط´ط§ظ† ط§ظ„ط¨ظˆطھ ظٹط±ط¯ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ ط¹ظ„ظ‰ ظƒظ„ظ…ط§طھ ظ…ط¹ظٹظ†ط©.</p>
         </div>
       )}
     </div>
   );
 }
 
-// ══════════════════════ KEYWORDS TAB ══════════════════════
-function KeywordsTab({ t, toast }: any) {
+// â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ KEYWORDS TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+// `t` is accepted for symmetry with the other tabs; this one is hardcoded Arabic.
+function KeywordsTab({ toast }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -923,15 +929,15 @@ function KeywordsTab({ t, toast }: any) {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ keywords: form.keywords, reply: form.reply, context: form.context }),
         }).then(r => r.json());
-        if (!res.error) { setItems(prev => prev.map(i => i.id === editId ? res : i)); toast.success('تم التعديل ✓', ''); resetForm(); }
+        if (!res.error) { setItems(prev => prev.map(i => i.id === editId ? res : i)); toast.success('طھظ… ط§ظ„طھط¹ط¯ظٹظ„ âœ“', ''); resetForm(); }
       } else {
         const res = await fetch('/bot-api/api/keywords', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ keywords: form.keywords, reply: form.reply, context: form.context }),
         }).then(r => r.json());
-        if (!res.error) { setItems(prev => [...prev, res]); toast.success('تمت الإضافة ✓', ''); resetForm(); }
+        if (!res.error) { setItems(prev => [...prev, res]); toast.success('طھظ…طھ ط§ظ„ط¥ط¶ط§ظپط© âœ“', ''); resetForm(); }
       }
-    } catch { toast.error('حصل خطأ', ''); }
+    } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
   const toggleItem = async (id: string, enabled: boolean) => {
@@ -941,7 +947,7 @@ function KeywordsTab({ t, toast }: any) {
         body: JSON.stringify({ enabled: !enabled }),
       }).then(r => r.json());
       if (!res.error) setItems(prev => prev.map(i => i.id === id ? res : i));
-    } catch { toast.error('حصل خطأ', ''); }
+    } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
   const deleteItem = async (id: string) => {
@@ -949,11 +955,11 @@ function KeywordsTab({ t, toast }: any) {
       const res = await fetch(`/bot-api/api/keywords/${id}`, { method: 'DELETE' }).then(r => r.json());
       if (res.removed) {
         setItems(prev => prev.filter(i => i.id !== id));
-        toast.success('تم الحذف ✓', '');
+        toast.success('طھظ… ط§ظ„ط­ط°ظپ âœ“', '');
       } else {
-        toast.error(res.error || 'فشل الحذف', '');
+        toast.error(res.error || 'ظپط´ظ„ ط§ظ„ط­ط°ظپ', '');
       }
-    } catch { toast.error('حصل خطأ', ''); }
+    } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
   const startEdit = (item: any) => {
@@ -970,30 +976,30 @@ function KeywordsTab({ t, toast }: any) {
 
   return (
     <div>
-      {/* ─── Header ─── */}
+      {/* â”€â”€â”€ Header â”€â”€â”€ */}
       <div className="tab-section">
         <div className="section-header">
-          <h3 className="section-title">الكلمات المفتاحية ({items.length})</h3>
+          <h3 className="section-title">ط§ظ„ظƒظ„ظ…ط§طھ ط§ظ„ظ…ظپطھط§ط­ظٹط© ({items.length})</h3>
           <button className={`btn-${showForm ? 'secondary' : 'primary'} btn-sm`} onClick={() => { resetForm(); setShowForm(!showForm); }}>
-            {showForm ? '✕ إلغاء' : '+ إضافة كلمات'}
+            {showForm ? 'âœ• ط¥ظ„ط؛ط§ط،' : '+ ط¥ط¶ط§ظپط© ظƒظ„ظ…ط§طھ'}
           </button>
         </div>
 
-        {/* ─── Form ─── */}
+        {/* â”€â”€â”€ Form â”€â”€â”€ */}
         {showForm && (
           <div className="rule-form-card">
             <div className="rule-form-field">
-              <label>الكلمات المفتاحية (اكتب كلمة وإضغط Enter)</label>
+              <label>ط§ظ„ظƒظ„ظ…ط§طھ ط§ظ„ظ…ظپطھط§ط­ظٹط© (ط§ظƒطھط¨ ظƒظ„ظ…ط© ظˆط¥ط¶ط؛ط· Enter)</label>
               <div className="keyword-chips-input">
                 {form.keywords.map(kw => (
                   <span key={kw} className="kw-chip">
                     {kw}
-                    <button className="kw-chip-remove" onClick={() => removeKeyword(kw)}>×</button>
+                    <button className="kw-chip-remove" onClick={() => removeKeyword(kw)}>أ—</button>
                   </span>
                 ))}
                 <input
                   className="kw-input"
-                  placeholder={form.keywords.length === 0 ? 'مثال: سلام, مرحبا, هلا' : 'اكلمة جديدة...'}
+                  placeholder={form.keywords.length === 0 ? 'ظ…ط«ط§ظ„: ط³ظ„ط§ظ…, ظ…ط±ط­ط¨ط§, ظ‡ظ„ط§' : 'ط§ظƒظ„ظ…ط© ط¬ط¯ظٹط¯ط©...'}
                   value={keywordInput}
                   onChange={e => setKeywordInput(e.target.value)}
                   onKeyDown={handleKeywordKey}
@@ -1003,31 +1009,31 @@ function KeywordsTab({ t, toast }: any) {
               </div>
             </div>
             <div className="rule-form-field">
-              <label>الرد</label>
-              <input placeholder="مثال: وعليكم السلام" value={form.reply} onChange={e => setForm(prev => ({ ...prev, reply: e.target.value }))} />
+              <label>ط§ظ„ط±ط¯</label>
+              <input placeholder="ظ…ط«ط§ظ„: ظˆط¹ظ„ظٹظƒظ… ط§ظ„ط³ظ„ط§ظ…" value={form.reply} onChange={e => setForm(prev => ({ ...prev, reply: e.target.value }))} />
             </div>
             <div className="rule-form-field">
-              <label>سياق (اختياري)</label>
-              <input placeholder="مثال: للترحيب فقط" value={form.context} onChange={e => setForm(prev => ({ ...prev, context: e.target.value }))} />
+              <label>ط³ظٹط§ظ‚ (ط§ط®طھظٹط§ط±ظٹ)</label>
+              <input placeholder="ظ…ط«ط§ظ„: ظ„ظ„طھط±ط­ظٹط¨ ظپظ‚ط·" value={form.context} onChange={e => setForm(prev => ({ ...prev, context: e.target.value }))} />
             </div>
             <div className="rule-form-actions">
               <button className="btn-primary btn-sm" onClick={saveItem} disabled={form.keywords.length === 0 || !form.reply}>
-                {editId ? '💾 حفظ التعديل' : '➕ إضافة القاعدة'}
+                {editId ? 'ًں’¾ ط­ظپط¸ ط§ظ„طھط¹ط¯ظٹظ„' : 'â‍• ط¥ط¶ط§ظپط© ط§ظ„ظ‚ط§ط¹ط¯ط©'}
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* ─── Search ─── */}
+      {/* â”€â”€â”€ Search â”€â”€â”€ */}
       {items.length > 0 && (
         <div className="list-search" style={{ marginBottom: '0.75rem' }}>
-          <span className="list-search-icon">🔍</span>
-          <input placeholder="ابحث في الكلمات المفتاحية..." value={search} onChange={e => setSearch(e.target.value)} />
+          <span className="list-search-icon">ًں”چ</span>
+          <input placeholder="ط§ط¨ط­ط« ظپظٹ ط§ظ„ظƒظ„ظ…ط§طھ ط§ظ„ظ…ظپطھط§ط­ظٹط©..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
       )}
 
-      {/* ─── List ─── */}
+      {/* â”€â”€â”€ List â”€â”€â”€ */}
       {filtered.length > 0 ? (
         <div className="tab-section">
           <div className="rules-list">
@@ -1040,38 +1046,38 @@ function KeywordsTab({ t, toast }: any) {
                         <span key={kw} className="kw-badge">{kw}</span>
                       ))}
                     </div>
-                    <div className="rule-card-arrow">→</div>
+                    <div className="rule-card-arrow">â†’</div>
                     <div className="rule-card-response">{item.reply}</div>
                   </div>
-                  {item.context && <div className="rule-card-context">📎 {item.context}</div>}
+                  {item.context && <div className="rule-card-context">ًں“ژ {item.context}</div>}
                 </div>
                 <div className="rule-card-actions">
                   <button
                     className={`toggle-btn ${item.enabled !== false ? 'on' : 'off'}`}
                     onClick={() => toggleItem(item.id, item.enabled !== false)}
-                    title={item.enabled !== false ? 'تعطيل' : 'تفعيل'}
+                    title={item.enabled !== false ? 'طھط¹ط·ظٹظ„' : 'طھظپط¹ظٹظ„'}
                   >
                     <span className="toggle-knob" />
                   </button>
-                  <button className="btn-icon-sm" onClick={() => startEdit(item)} title="تعديل">✏️</button>
-                  <button className="btn-icon-sm danger" onClick={() => deleteItem(item.id)} title="حذف">🗑️</button>
+                  <button className="btn-icon-sm" onClick={() => startEdit(item)} title="طھط¹ط¯ظٹظ„">âœڈï¸ڈ</button>
+                  <button className="btn-icon-sm danger" onClick={() => deleteItem(item.id)} title="ط­ط°ظپ">ًں—‘ï¸ڈ</button>
                 </div>
               </div>
             ))}
           </div>
         </div>
       ) : items.length > 0 ? (
-        <div className="empty-state-sm">لا توجد نتائج للبحث "{search}"</div>
+        <div className="empty-state-sm">ظ„ط§ طھظˆط¬ط¯ ظ†طھط§ط¦ط¬ ظ„ظ„ط¨ط­ط« "{search}"</div>
       ) : (
         <div className="empty-state">
-          <p>مافيش كلمات مفتاحية. أضف كلمات عشان البوت يرد عليها تلقائياً.</p>
+          <p>ظ…ط§ظپظٹط´ ظƒظ„ظ…ط§طھ ظ…ظپطھط§ط­ظٹط©. ط£ط¶ظپ ظƒظ„ظ…ط§طھ ط¹ط´ط§ظ† ط§ظ„ط¨ظˆطھ ظٹط±ط¯ ط¹ظ„ظٹظ‡ط§ طھظ„ظ‚ط§ط¦ظٹط§ظ‹.</p>
         </div>
       )}
     </div>
   );
 }
 
-// ══════════════════════ MEMORY TAB ══════════════════════
+// â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ MEMORY TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
 function MemoryTab({ t, toast }: any) {
   const [memories, setMemories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1110,7 +1116,7 @@ function MemoryTab({ t, toast }: any) {
           <div key={m.chatId || m.id} className="memory-item">
             <div className="memory-chat">{m.chatId || m.id}</div>
             <div className="memory-data">{(m.memory || m.data || '').slice(0, 100)}</div>
-            <button className="btn-danger" onClick={() => clearMemory(m.chatId || m.id)}>✕</button>
+            <button className="btn-danger" onClick={() => clearMemory(m.chatId || m.id)}>âœ•</button>
           </div>
         ))}
       </div>
