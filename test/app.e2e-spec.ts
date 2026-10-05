@@ -3,7 +3,6 @@ import { INestApplication } from '@nestjs/common';
 import { Server } from 'http';
 import request from 'supertest';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 
 /**
@@ -36,20 +35,14 @@ function bodyOf<T>(response: { body: unknown }): T {
  * so it both failed and leaked open connections. Behaviour coverage lives in
  * `integration/app.e2e-spec.ts`; this file only guards the top-level routes.
  *
- * Environment must be set before `AppModule` is imported — `configuration.ts` is evaluated
- * at import time by `ConfigModule.forRoot({ load: [configuration] })`.
+ * The temp-directory environment (DATABASE_*, SESSION_DATA_PATH, AUTH_KEY_FILE and the rest)
+ * lives in `test/e2e-env.setup.js`, wired up through `jest-e2e.json` as a `setupFiles` entry.
+ * It used to be assigned inline here, above the AppModule import, which looked equivalent but
+ * was not: TypeScript hoists every import to the top of the compiled file, so AppModule and
+ * the `configuration()` factory inside it had already evaluated before these assignments ran.
+ * `SESSION_DATA_PATH` therefore resolved to the live ./data/sessions, and each e2e run left an
+ * empty browser profile in the running instance's session folder.
  */
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-e2e-root-'));
-process.env.DATABASE_MAIN_NAME = path.join(tmpRoot, 'main.sqlite');
-process.env.DATABASE_NAME = path.join(tmpRoot, 'data.sqlite');
-process.env.STORAGE_LOCAL_PATH = path.join(tmpRoot, 'media');
-process.env.SESSION_DATA_PATH = path.join(tmpRoot, 'sessions');
-process.env.QUEUE_ENABLED = 'false';
-process.env.CACHE_ENABLED = 'false';
-// Booting AppModule runs AuthService.onModuleInit, which seeds an admin key. Without this
-// the suite writes to the shared ./data/.api-key and invalidates the live instance's key.
-process.env.AUTH_KEY_FILE = path.join(tmpRoot, '.api-key');
-
 import { AppModule } from './../src/app.module';
 
 describe('HTTP surface (e2e)', () => {
@@ -70,7 +63,9 @@ describe('HTTP surface (e2e)', () => {
 
   afterAll(async () => {
     await app?.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    // Closes the database handles first. Deleting the files while they are still open succeeds
+    // on Windows but leaves the file locked for anything that tries to reopen it later.
+    fs.rmSync(process.env.OPENWA_E2E_TMP_ROOT!, { recursive: true, force: true });
   });
 
   it('/ (GET) serves HTML with the dashboard mount point', async () => {
@@ -86,8 +81,9 @@ describe('HTTP surface (e2e)', () => {
 
   it('/ (GET) serves the built dashboard when one is present', async () => {
     // Builds a throwaway dashboard bundle so the SPA branch is exercised without depending on
-    // the developer having run `npm --prefix dashboard run build`.
-    const distDir = path.join(tmpRoot, 'dashboard-dist');
+    // the developer having run `npm --prefix dashboard run build`. The temp root comes from the
+    // environment because this file no longer creates one itself - see e2e-env.setup.js.
+    const distDir = path.join(process.env.OPENWA_E2E_TMP_ROOT!, 'dashboard-dist');
     fs.mkdirSync(distDir, { recursive: true });
     fs.writeFileSync(
       path.join(distDir, 'index.html'),

@@ -7,34 +7,26 @@ import { DataSource, Repository } from 'typeorm';
 import * as fs from 'fs';
 import * as http from 'http';
 import type { AddressInfo } from 'net';
-import * as os from 'os';
-import * as path from 'path';
 import { createHmac } from 'crypto';
 import { FakeEngine } from './fake-engine';
 
 /**
- * Environment must be set before `AppModule` (and therefore `configuration.ts`) is
- * imported, because `ConfigModule.forRoot({ load: [configuration] })` evaluates it at
- * import time. Each run gets its own SQLite files and media dir, so suites never share state
- * and never touch a developer's real `./data`.
+ * The temp-directory environment (DATABASE_*, STORAGE_LOCAL_PATH, SESSION_DATA_PATH,
+ * AUTH_KEY_FILE) lives in `test/e2e-env.setup.js`, wired through `jest-e2e.json`.
+ *
+ * It used to be assigned inline here, above the AppModule import, which looked equivalent but
+ * was not. TypeScript hoists every import to the top of the compiled file, so AppModule - and
+ * with it the `configuration()` factory inside ConfigModule, which reads SESSION_DATA_PATH when
+ * it is evaluated - had already run before these statements executed. The databases were
+ * unaffected because they are opened after `init()`, but the session path was read at import
+ * time and resolved to the .env default of ./data/sessions. That is why every e2e run left an
+ * empty `session-lifecycle-*` browser profile in the live instance's session folder.
+ *
+ * `DATABASE_SYNCHRONIZE` stays unset on purpose: this suite reproduces the *default* production
+ * boot path, where the data DB relies on migrations rather than synchronize. If the schema does
+ * not appear, the test must fail loudly - that is the whole point of it. See
+ * `e2e-env.setup.js`.
  */
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-e2e-'));
-process.env.DATABASE_MAIN_NAME = path.join(tmpRoot, 'main.sqlite');
-process.env.DATABASE_NAME = path.join(tmpRoot, 'data.sqlite');
-process.env.STORAGE_LOCAL_PATH = path.join(tmpRoot, 'media');
-process.env.SESSION_DATA_PATH = path.join(tmpRoot, 'sessions');
-process.env.QUEUE_ENABLED = 'false';
-process.env.CACHE_ENABLED = 'false';
-// This suite boots the real AppModule, so AuthService.onModuleInit runs and seeds an admin
-// key. Without this it falls back to the shared ./data/.api-key and overwrites the live
-// instance's credential -- which then 401s every operator on the next request. The databases
-// above are tmp-scoped for exactly this reason; the key file was missed.
-process.env.AUTH_KEY_FILE = path.join(tmpRoot, '.api-key');
-// Deliberately left unset: this reproduces the *default* production boot path, where the
-// data DB relies on migrations rather than synchronize. If the schema does not appear, the
-// test must fail loudly — that is the whole point of this suite.
-delete process.env.DATABASE_SYNCHRONIZE;
-
 import { AppModule } from '../../src/app.module';
 import { EngineFactory } from '../../src/engine/engine.factory';
 import { SessionService } from '../../src/modules/session/session.service';
@@ -110,7 +102,7 @@ describe('OpenWA integration (real app, real SQLite, fake engine)', () => {
 
   afterAll(async () => {
     await app?.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    fs.rmSync(process.env.OPENWA_E2E_TMP_ROOT!, { recursive: true, force: true });
   });
 
   /** Lets background `safely()` work and the SQLite writes it queues settle. */
@@ -666,8 +658,26 @@ describe('OpenWA integration (real app, real SQLite, fake engine)', () => {
       // A second application instance is booted so this can assert on close() itself; it
       // shares the same SQLite files as the outer app, which is harmless because each
       // Nest application owns its own connections.
-      const fresh = await NestFactory.create(AppModule, { logger: false });
-      await fresh.init();
+      //
+      // Autostart is disabled for it deliberately. Unlike the outer app this one has no
+      // EngineFactory override, so SessionService.onModuleInit would resume whatever
+      // sessions the earlier tests left in a live state using the *real* whatsapp-web.js
+      // adapter -- which launches Chromium and creates a profile directory under
+      // SESSION_DATA_PATH. That is a real browser, in a unit test, writing to the
+      // operator's live session directory. Nothing here needs a resumed engine.
+      const previousAutostart = process.env.SESSION_AUTOSTART;
+      process.env.SESSION_AUTOSTART = 'false';
+      let fresh: Awaited<ReturnType<typeof NestFactory.create>> | undefined;
+      try {
+        fresh = await NestFactory.create(AppModule, { logger: false });
+        await fresh.init();
+      } finally {
+        if (previousAutostart === undefined) {
+          delete process.env.SESSION_AUTOSTART;
+        } else {
+          process.env.SESSION_AUTOSTART = previousAutostart;
+        }
+      }
 
       const main = fresh.get<DataSource>(getDataSourceToken('main'));
       const data = fresh.get<DataSource>(getDataSourceToken('data'));

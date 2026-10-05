@@ -44,7 +44,9 @@ export class EngineFactory implements OnModuleInit {
     const wwjsPlugin = new WhatsAppWebJsPlugin();
     this.pluginLoader.registerBuiltInPlugin(wwjsManifest, wwjsPlugin);
 
-    // Set engine config from environment
+    // Set engine config from environment. Only the executable path goes through the
+    // plugin's stored config; sessionDataPath/headless/args are passed per-create() from
+    // ConfigService, so changing them needs no restart to take effect.
     const executablePath =
       this.configService.get<string>('PUPPETEER_EXECUTABLE_PATH') || process.env.PUPPETEER_EXECUTABLE_PATH;
     if (executablePath) {
@@ -74,10 +76,19 @@ export class EngineFactory implements OnModuleInit {
     const enginePlugin = this.pluginLoader.getPlugin(this.engineType);
 
     if (enginePlugin?.instance && this.isEnginePlugin(enginePlugin.instance)) {
+      // Engine config is resolved here rather than inside the plugin: this is the only
+      // place holding a ConfigService, so it is the only place that can honour
+      // SESSION_DATA_PATH, PUPPETEER_HEADLESS and PUPPETEER_ARGS.
       return enginePlugin.instance.createEngine({
         sessionId: options.sessionId,
         proxyUrl: options.proxyUrl,
         proxyType: options.proxyType,
+        sessionDataPath: this.configService.get<string>('engine.sessionDataPath') ?? './data/sessions',
+        headless: this.configService.get<boolean>('engine.puppeteer.headless') ?? true,
+        puppeteerArgs: this.configService.get<string[]>('engine.puppeteer.args') ?? [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+        ],
       }) as IWhatsAppEngine;
     }
 

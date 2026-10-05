@@ -36,16 +36,24 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
 
   createEngine(config: Record<string, unknown>): IWhatsAppEngine {
     const sessionId = config.sessionId as string;
-    const sessionDataPath = (this.context?.config.sessionDataPath as string) ?? './data/sessions';
-    const headless = (this.context?.config.headless as boolean) ?? true;
+
+    // Per-call config from EngineFactory.create() wins over the plugin's stored config,
+    // which in turn wins over the built-in defaults. EngineFactory reads these from
+    // ConfigService (so SESSION_DATA_PATH and friends are honoured); reading them only
+    // from the plugin config pinned the profile directory to './data/sessions' no matter
+    // what the operator configured, because nothing ever seeded that key.
+    const sessionDataPath =
+      (config.sessionDataPath as string | undefined) ??
+      (this.context?.config.sessionDataPath as string | undefined) ??
+      './data/sessions';
+    const headless = (config.headless as boolean | undefined) ?? (this.context?.config.headless as boolean) ?? true;
     const puppeteerExecutablePath =
+      (config.puppeteerExecutablePath as string | undefined) ||
       (this.context?.config.puppeteerExecutablePath as string | undefined) ||
       process.env.PUPPETEER_EXECUTABLE_PATH ||
       undefined;
-    const puppeteerArgs = (this.context?.config.puppeteerArgs as string[]) ?? [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-    ];
+    const puppeteerArgs = (config.puppeteerArgs as string[] | undefined) ??
+      (this.context?.config.puppeteerArgs as string[]) ?? ['--no-sandbox', '--disable-setuid-sandbox'];
 
     const proxyUrl = config.proxyUrl as string | undefined;
     const proxyType = config.proxyType as 'http' | 'https' | 'socks4' | 'socks5' | undefined;

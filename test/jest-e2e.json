@@ -10,5 +10,6 @@
     "^puppeteer(-core)?$": "<rootDir>/__mocks__/puppeteer.js",
     "^@puppeteer/browsers$": "<rootDir>/__mocks__/puppeteer.js"
   },
+  "setupFiles": ["<rootDir>/e2e-env.setup.js"],
   "testTimeout": 60000
 }
