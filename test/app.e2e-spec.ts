@@ -46,6 +46,9 @@ process.env.STORAGE_LOCAL_PATH = path.join(tmpRoot, 'media');
 process.env.SESSION_DATA_PATH = path.join(tmpRoot, 'sessions');
 process.env.QUEUE_ENABLED = 'false';
 process.env.CACHE_ENABLED = 'false';
+// Booting AppModule runs AuthService.onModuleInit, which seeds an admin key. Without this
+// the suite writes to the shared ./data/.api-key and invalidates the live instance's key.
+process.env.AUTH_KEY_FILE = path.join(tmpRoot, '.api-key');
 
 import { AppModule } from './../src/app.module';
 

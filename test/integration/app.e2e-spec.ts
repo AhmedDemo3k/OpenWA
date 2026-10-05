@@ -25,6 +25,11 @@ process.env.STORAGE_LOCAL_PATH = path.join(tmpRoot, 'media');
 process.env.SESSION_DATA_PATH = path.join(tmpRoot, 'sessions');
 process.env.QUEUE_ENABLED = 'false';
 process.env.CACHE_ENABLED = 'false';
+// This suite boots the real AppModule, so AuthService.onModuleInit runs and seeds an admin
+// key. Without this it falls back to the shared ./data/.api-key and overwrites the live
+// instance's credential -- which then 401s every operator on the next request. The databases
+// above are tmp-scoped for exactly this reason; the key file was missed.
+process.env.AUTH_KEY_FILE = path.join(tmpRoot, '.api-key');
 // Deliberately left unset: this reproduces the *default* production boot path, where the
 // data DB relies on migrations rather than synchronize. If the schema does not appear, the
 // test must fail loudly — that is the whole point of this suite.
