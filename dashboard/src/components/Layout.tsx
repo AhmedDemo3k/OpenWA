@@ -8,6 +8,7 @@ import {
   Key,
   FileText,
   LogOut,
+  BotMessageSquare,
   Send,
   Server,
   Puzzle,
@@ -35,6 +36,7 @@ const allNavItems = [
   { to: '/sessions', icon: Smartphone, key: 'sessions' as const, adminOnly: false },
   { to: '/webhooks', icon: Webhook, key: 'webhooks' as const, adminOnly: false },
   { to: '/api-keys', icon: Key, key: 'apiKeys' as const, adminOnly: true },
+  { to: '/bot-settings', icon: BotMessageSquare, key: 'botSettings' as const, adminOnly: false },
   { to: '/message-tester', icon: Send, key: 'messageTester' as const, adminOnly: false },
   { to: '/infrastructure', icon: Server, key: 'infrastructure' as const, adminOnly: false },
   { to: '/plugins', icon: Puzzle, key: 'plugins' as const, adminOnly: true },
@@ -85,8 +87,8 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     const next = supportedLanguages[(idx + 1) % supportedLanguages.length];
     void i18n.changeLanguage(next);
   };
-  const languageLabel = currentLang === 'he' ? 'עברית' : 'EN';
-  const isRtl = currentLang === 'he';
+  const languageLabel = currentLang === 'ar' ? 'العربية' : 'EN';
+  const isRtl = currentLang === 'ar';
 
   return (
     <div className="layout">

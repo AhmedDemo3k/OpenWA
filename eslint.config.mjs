@@ -32,4 +32,20 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    // `require-await` is a heuristic, and it misfires on test doubles. `FakeEngine` has to
+    // mirror `IWhatsAppEngine`'s async signatures exactly, so ~40 of its methods are
+    // `async` and return a constant with nothing to await. Rewriting them as
+    // `return Promise.resolve(x)` would add churn to every stub for no behavioural change.
+    //
+    // This is deliberately narrow: it only relaxes the one stylistic rule, so the
+    // type-safety rules (no-unsafe-*, no-unnecessary-assertion, etc.) still apply to tests.
+    // That matters -- it is how the fake engine's non-existent status values
+    // ('QR_RECEIVED', 'INITIALIZED', 'LOGGED_OUT') and the `revokeGroupInviteCode`
+    // return-type mismatch were caught.
+    files: ['test/**/*.ts', 'src/**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
+    },
+  },
 );

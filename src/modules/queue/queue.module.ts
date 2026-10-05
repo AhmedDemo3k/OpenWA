@@ -27,10 +27,29 @@ export { QUEUE_NAMES } from './queue-names';
           host: configService.get<string>('redis.host', 'localhost'),
           port: configService.get<number>('redis.port', 6379),
           password: configService.get<string>('redis.password'),
+          // Bounded reconnects. BullMQ needs this to be finite: with ioredis defaults a
+          // dead Redis leaves a worker alive forever, retrying silently and never
+          // surfacing as unhealthy.
+          maxRetriesPerRequest: 3,
+          enableOfflineQueue: false,
+          retryStrategy: (times: number): number => Math.min(times * 500, 10_000),
         },
       }),
     }),
-    BullModule.registerQueue({ name: QUEUE_NAMES.WEBHOOK }),
+    BullModule.registerQueue({
+      name: QUEUE_NAMES.WEBHOOK,
+      // Without explicit retention BullMQ keeps every completed *and* failed job in Redis
+      // forever. On a busy gateway that is an unbounded memory leak in the one component
+      // designed to run indefinitely. Keep a bounded window of each: recent completions
+      // for debugging, and recent failures as a de-facto dead-letter queue.
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: { count: 1000, age: 3600 },
+        removeOnFail: { count: 5000, age: 86_400 },
+      },
+    }),
+
     BullBoardModule.forRoot({
       route: '/admin/queues',
       adapter: ExpressAdapter,

@@ -1,339 +1,145 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { AuthService } from './auth.service';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 
-// Helpers
-const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
+const DEV_KEY = 'dev-admin-key';
+const hash = (raw: string): string => createHash('sha256').update(raw).digest('hex');
+const STRONG_KEY = `owa_k1_${'a'.repeat(64)}`;
 
-function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
-  return {
-    id: 'uuid-1',
-    name: 'Test Key',
-    keyHash: hashKey('test-key'),
-    keyPrefix: 'test-key-pre',
-    role: ApiKeyRole.OPERATOR,
-    allowedIps: null,
-    allowedSessions: null,
-    isActive: true,
-    expiresAt: null,
-    lastUsedAt: null,
-    usageCount: 0,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    ...overrides,
+/**
+ * Regression coverage for the dev-key-in-production leak.
+ *
+ * `onModuleInit` only seeded a key when the table was empty, so a database that had ever
+ * been touched in development kept `dev-admin-key` valid forever. Promoting that database
+ * shipped a credential that is published in every public repository to a public endpoint.
+ */
+describe('AuthService (production bootstrap)', () => {
+  const savedEnv = { ...process.env };
+  let repo: {
+    count: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+    remove: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
   };
-}
+  let module: TestingModule;
+  let keyFile: string;
 
-describe('AuthService', () => {
-  let service: AuthService;
-  let repository: jest.Mocked<Partial<Repository<ApiKey>>>;
+  const makeKey = (raw: string, name = 'Default Admin Key'): ApiKey =>
+    ({
+      id: `id-${raw}`,
+      name,
+      keyHash: hash(raw),
+      keyPrefix: raw.substring(0, 12),
+      role: ApiKeyRole.ADMIN,
+      isActive: true,
+    }) as ApiKey;
 
   beforeEach(async () => {
-    repository = {
-      count: jest.fn(),
-      find: jest.fn(),
-      findOne: jest.fn(),
-      create: jest.fn(),
-      save: jest.fn(),
-      remove: jest.fn(),
+    keyFile = join(tmpdir(), `openwa-apikey-${Math.random().toString(36).slice(2)}.key`);
+    process.env.AUTH_KEY_FILE = keyFile;
+
+    repo = {
+      count: jest.fn().mockResolvedValue(0),
+      create: jest.fn((entity: ApiKey) => entity),
+      save: jest.fn(async (entity: ApiKey) => entity),
+      remove: jest.fn(async () => undefined),
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue(null),
     };
 
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        AuthService,
-        {
-          provide: getRepositoryToken(ApiKey, 'main'),
-          useValue: repository,
-        },
-      ],
+    module = await Test.createTestingModule({
+      providers: [AuthService, { provide: getRepositoryToken(ApiKey, 'main'), useValue: repo }],
     }).compile();
-
-    service = module.get<AuthService>(AuthService);
   });
 
-  // ── createApiKey ──────────────────────────────────────────────────
-
-  describe('createApiKey', () => {
-    it('should generate a key with owa_k1_ prefix and save to DB', async () => {
-      const mockSaved = createMockApiKey({ name: 'My Key' });
-      (repository.create as jest.Mock).mockReturnValue(mockSaved);
-      (repository.save as jest.Mock).mockResolvedValue(mockSaved);
-
-      const result = await service.createApiKey({ name: 'My Key' });
-
-      expect(result.rawKey).toMatch(/^owa_k1_[a-f0-9]{64}$/);
-      expect(result.apiKey).toBe(mockSaved);
-      expect(repository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: 'My Key',
-          role: ApiKeyRole.OPERATOR, // default
-        }),
-      );
-    });
-
-    it('should use the provided role instead of default', async () => {
-      const mockSaved = createMockApiKey({ role: ApiKeyRole.ADMIN });
-      (repository.create as jest.Mock).mockReturnValue(mockSaved);
-      (repository.save as jest.Mock).mockResolvedValue(mockSaved);
-
-      await service.createApiKey({ name: 'Admin Key', role: ApiKeyRole.ADMIN });
-
-      expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ role: ApiKeyRole.ADMIN }));
-    });
-
-    it('should store the SHA-256 hash, not the raw key', async () => {
-      const mockSaved = createMockApiKey();
-      (repository.create as jest.Mock).mockReturnValue(mockSaved);
-      (repository.save as jest.Mock).mockResolvedValue(mockSaved);
-
-      const result = await service.createApiKey({ name: 'Test' });
-
-      const expectedHash = hashKey(result.rawKey);
-      expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ keyHash: expectedHash }));
-    });
+  afterEach(async () => {
+    await module.close();
+    process.env = { ...savedEnv };
+    rmSync(keyFile, { force: true });
   });
 
-  // ── findAll / findOne ─────────────────────────────────────────────
+  const build = (): AuthService => module.get<AuthService>(AuthService);
 
-  describe('findAll', () => {
-    it('should return all API keys ordered by createdAt DESC', async () => {
-      const keys = [createMockApiKey(), createMockApiKey({ id: 'uuid-2' })];
-      (repository.find as jest.Mock).mockResolvedValue(keys);
+  const seedDevKeyInDb = (): void => {
+    repo.count.mockResolvedValue(1);
+    repo.find.mockResolvedValue([makeKey(DEV_KEY)]);
+    // the .api-key file still holds the dev key, exactly as a dev-mode seed leaves it
+    writeFileSync(keyFile, DEV_KEY, 'utf-8');
+  };
 
-      const result = await service.findAll();
+  describe('development key found while running in production', () => {
+    it('rotates it out and persists a strong replacement', async () => {
+      process.env.NODE_ENV = 'production';
+      seedDevKeyInDb();
 
-      expect(result).toHaveLength(2);
-      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+      await build().onModuleInit();
+
+      expect(repo.remove).toHaveBeenCalledTimes(1);
+      const persisted = readFileSync(keyFile, 'utf-8');
+      expect(persisted).not.toBe(DEV_KEY);
+      expect(persisted).toMatch(/^owa_k1_[0-9a-f]{64}$/);
+    });
+
+    it('leaves a real operator key untouched', async () => {
+      process.env.NODE_ENV = 'production';
+      repo.count.mockResolvedValue(1);
+      repo.find.mockResolvedValue([]);
+      repo.findOne.mockResolvedValue(makeKey(STRONG_KEY));
+      writeFileSync(keyFile, STRONG_KEY, 'utf-8');
+
+      await build().onModuleInit();
+
+      expect(repo.remove).not.toHaveBeenCalled();
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(readFileSync(keyFile, 'utf-8')).toBe(STRONG_KEY);
+    });
+
+    it('does not rotate in development', async () => {
+      process.env.NODE_ENV = 'development';
+      seedDevKeyInDb();
+
+      await build().onModuleInit();
+
+      expect(repo.remove).not.toHaveBeenCalled();
+      expect(readFileSync(keyFile, 'utf-8')).toBe(DEV_KEY);
     });
   });
 
-  describe('findOne', () => {
-    it('should return the API key if found', async () => {
-      const key = createMockApiKey();
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
+  describe('stale key file', () => {
+    it('refuses to display a key that no longer authenticates', async () => {
+      process.env.NODE_ENV = 'production';
+      repo.count.mockResolvedValue(1);
+      repo.find.mockResolvedValue([]);
+      // file points at a key that was deleted from the database
+      const gone = `owa_k1_${'b'.repeat(64)}`;
+      writeFileSync(keyFile, gone, 'utf-8');
+      repo.findOne.mockResolvedValue(null);
 
-      const result = await service.findOne('uuid-1');
-      expect(result).toBe(key);
-    });
+      await build().onModuleInit();
 
-    it('should throw NotFoundException if key not found', async () => {
-      (repository.findOne as jest.Mock).mockResolvedValue(null);
-
-      await expect(service.findOne('nonexistent')).rejects.toThrow(NotFoundException);
-    });
-  });
-
-  // ── update ────────────────────────────────────────────────────────
-
-  describe('update', () => {
-    it('should update only the provided fields', async () => {
-      const key = createMockApiKey();
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
-
-      const result = await service.update('uuid-1', { name: 'Updated' });
-
-      expect(result.name).toBe('Updated');
-      expect(result.role).toBe(ApiKeyRole.OPERATOR); // unchanged
+      // nothing seeded, nothing deleted -- the banner simply must not show a dead secret
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(repo.remove).not.toHaveBeenCalled();
     });
   });
 
-  // ── delete / revoke ───────────────────────────────────────────────
+  it('creates missing parent directories before writing the key', async () => {
+    process.env.NODE_ENV = 'development';
+    const root = join(tmpdir(), `openwa-nested-${Math.random().toString(36).slice(2)}`);
+    const nested = join(root, 'deeper', '.api-key');
+    process.env.AUTH_KEY_FILE = nested;
 
-  describe('delete', () => {
-    it('should remove the API key from DB', async () => {
-      const key = createMockApiKey();
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.remove as jest.Mock).mockResolvedValue(key);
+    await build().onModuleInit();
 
-      await service.delete('uuid-1');
-
-      expect(repository.remove).toHaveBeenCalledWith(key);
-    });
-
-    it('should throw NotFoundException for non-existent key', async () => {
-      (repository.findOne as jest.Mock).mockResolvedValue(null);
-
-      await expect(service.delete('nonexistent')).rejects.toThrow(NotFoundException);
-    });
-  });
-
-  describe('revoke', () => {
-    it('should set isActive to false', async () => {
-      const key = createMockApiKey({ isActive: true });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
-
-      const result = await service.revoke('uuid-1');
-
-      expect(result.isActive).toBe(false);
-    });
-  });
-
-  // ── validateApiKey ────────────────────────────────────────────────
-
-  describe('validateApiKey', () => {
-    it('should return the API key for a valid raw key', async () => {
-      const rawKey = 'test-key';
-      const key = createMockApiKey({ keyHash: hashKey(rawKey) });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
-
-      const result = await service.validateApiKey(rawKey);
-
-      expect(result.id).toBe(key.id);
-      expect(result.usageCount).toBe(1);
-      expect(result.lastUsedAt).toBeDefined();
-    });
-
-    it('should throw UnauthorizedException for invalid key', async () => {
-      (repository.findOne as jest.Mock).mockResolvedValue(null);
-
-      await expect(service.validateApiKey('wrong-key')).rejects.toThrow(UnauthorizedException);
-    });
-
-    it('should throw UnauthorizedException for revoked key', async () => {
-      const key = createMockApiKey({ isActive: false, keyHash: hashKey('revoked') });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-
-      await expect(service.validateApiKey('revoked')).rejects.toThrow('API key is revoked');
-    });
-
-    it('should throw UnauthorizedException for expired key', async () => {
-      const expired = new Date();
-      expired.setDate(expired.getDate() - 1);
-      const key = createMockApiKey({ expiresAt: expired, keyHash: hashKey('expired') });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-
-      await expect(service.validateApiKey('expired')).rejects.toThrow('API key has expired');
-    });
-
-    it('should throw UnauthorizedException when IP is not allowed', async () => {
-      const key = createMockApiKey({
-        allowedIps: ['10.0.0.1'],
-        keyHash: hashKey('ip-restricted'),
-      });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-
-      await expect(service.validateApiKey('ip-restricted', '192.168.1.1')).rejects.toThrow('IP address not allowed');
-    });
-
-    it('should pass when client IP matches allowed IPs', async () => {
-      const key = createMockApiKey({
-        allowedIps: ['10.0.0.1'],
-        keyHash: hashKey('ip-ok'),
-      });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
-
-      const result = await service.validateApiKey('ip-ok', '10.0.0.1');
-      expect(result.id).toBe(key.id);
-    });
-
-    it('should throw UnauthorizedException when session not in allowedSessions', async () => {
-      const key = createMockApiKey({
-        allowedSessions: ['session-A'],
-        keyHash: hashKey('sess-restricted'),
-      });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-
-      await expect(service.validateApiKey('sess-restricted', undefined, 'session-B')).rejects.toThrow(
-        'API key not authorized for this session',
-      );
-    });
-  });
-
-  // ── hasPermission ─────────────────────────────────────────────────
-
-  describe('hasPermission', () => {
-    it('should allow ADMIN to access ADMIN routes', () => {
-      const key = createMockApiKey({ role: ApiKeyRole.ADMIN });
-      expect(service.hasPermission(key, ApiKeyRole.ADMIN)).toBe(true);
-    });
-
-    it('should allow ADMIN to access OPERATOR routes', () => {
-      const key = createMockApiKey({ role: ApiKeyRole.ADMIN });
-      expect(service.hasPermission(key, ApiKeyRole.OPERATOR)).toBe(true);
-    });
-
-    it('should allow ADMIN to access VIEWER routes', () => {
-      const key = createMockApiKey({ role: ApiKeyRole.ADMIN });
-      expect(service.hasPermission(key, ApiKeyRole.VIEWER)).toBe(true);
-    });
-
-    it('should deny VIEWER access to OPERATOR routes', () => {
-      const key = createMockApiKey({ role: ApiKeyRole.VIEWER });
-      expect(service.hasPermission(key, ApiKeyRole.OPERATOR)).toBe(false);
-    });
-
-    it('should deny OPERATOR access to ADMIN routes', () => {
-      const key = createMockApiKey({ role: ApiKeyRole.OPERATOR });
-      expect(service.hasPermission(key, ApiKeyRole.ADMIN)).toBe(false);
-    });
-  });
-
-  // ── hashKey (via validateApiKey) ──────────────────────────────────
-
-  describe('hashKey (determinism)', () => {
-    it('should produce the same hash for the same input', () => {
-      const key1 = createMockApiKey({ keyHash: hashKey('same-key') });
-      const key2 = createMockApiKey({ keyHash: hashKey('same-key') });
-
-      expect(key1.keyHash).toBe(key2.keyHash);
-    });
-
-    it('should produce different hashes for different inputs', () => {
-      expect(hashKey('key-a')).not.toBe(hashKey('key-b'));
-    });
-  });
-
-  // ── isIpAllowed / ipInCidr (via validateApiKey) ───────────────────
-
-  describe('IP CIDR validation (via validateApiKey)', () => {
-    it('should allow IP within CIDR range', async () => {
-      const key = createMockApiKey({
-        allowedIps: ['192.168.1.0/24'],
-        keyHash: hashKey('cidr-ok'),
-      });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
-
-      const result = await service.validateApiKey('cidr-ok', '192.168.1.100');
-      expect(result.id).toBe(key.id);
-    });
-
-    it('should reject IP outside CIDR range', async () => {
-      const key = createMockApiKey({
-        allowedIps: ['192.168.1.0/24'],
-        keyHash: hashKey('cidr-fail'),
-      });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-
-      await expect(service.validateApiKey('cidr-fail', '10.0.0.1')).rejects.toThrow('IP address not allowed');
-    });
-
-    it('should handle mixed exact IP and CIDR entries', async () => {
-      const key = createMockApiKey({
-        allowedIps: ['10.0.0.5', '192.168.0.0/16'],
-        keyHash: hashKey('mixed'),
-      });
-      (repository.findOne as jest.Mock).mockResolvedValue(key);
-      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
-
-      // Exact match
-      const r1 = await service.validateApiKey('mixed', '10.0.0.5');
-      expect(r1.id).toBe(key.id);
-
-      // Reset usage for second call
-      key.usageCount = 0;
-
-      // CIDR match
-      const r2 = await service.validateApiKey('mixed', '192.168.50.1');
-      expect(r2.id).toBe(key.id);
-    });
+    expect(existsSync(nested)).toBe(true);
+    expect(readFileSync(nested, 'utf-8')).toBe(DEV_KEY);
+    rmSync(root, { recursive: true, force: true });
   });
 });

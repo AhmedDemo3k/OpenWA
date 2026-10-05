@@ -34,12 +34,19 @@ services:
           'CMD',
           'node',
           '-e',
-          "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+          "require('http').get('http://localhost:2785/api/health/ready', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+    # Bounded logs; see the note in docker-compose.yml. A dev container left running
+    # overnight will otherwise grow a single unbounded log file.
+    logging:
+      driver: local
+      options:
+        max-size: '10m'
+        max-file: '3'
 
   # Dashboard Frontend
   dashboard:
@@ -53,6 +60,11 @@ services:
       openwa:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: '10m'
+        max-file: '3'
 
 networks:
   default:

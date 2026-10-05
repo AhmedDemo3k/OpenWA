@@ -81,8 +81,11 @@ RUN mkdir -p ./data/sessions ./data/media && \
 EXPOSE 2785
 
 # Health check
+# Uses readiness, not liveness: /api/health is dependency-free and returns 200 for as long
+# as the event loop turns, so a gateway wedged on a dead database would be reported healthy
+# and never restarted. /api/health/ready returns 503 when a required dependency is down.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
+    CMD node -e "require('http').get('http://localhost:2785/api/health/ready', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
 
 # Start with dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]

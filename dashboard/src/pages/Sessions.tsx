@@ -182,8 +182,8 @@ export function Sessions() {
 
   const filteredSessions = sessions.filter(s => {
     const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.id.toLowerCase().includes(searchQuery.toLowerCase());
+      (s.name ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.id ?? '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus =
       statusFilter === 'all' ||
       (statusFilter === 'active' && s.status === 'ready') ||

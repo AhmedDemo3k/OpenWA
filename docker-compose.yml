@@ -14,6 +14,11 @@ services:
     volumes:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     labels:
       - 'com.openwa.service=proxy'
       - 'com.openwa.core=true'
@@ -87,12 +92,22 @@ services:
           'CMD',
           'node',
           '-e',
-          "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+          "require('http').get('http://localhost:2785/api/health/ready', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+    # Bounded log files. Without an explicit limit Docker falls back to the `json-file`
+    # driver, which never truncates: a gateway that logs every inbound message and every
+    # reconnect eventually fills the host disk, which takes down the database with it.
+    # `local` is used instead of `json-file` because it compresses rotated segments.
+    logging:
+      driver: local
+      options:
+        max-size: '20m'
+        max-file: '5'
+        compress: 'true'
     labels:
       - 'com.openwa.service=api'
       - 'com.openwa.core=true'
@@ -109,6 +124,11 @@ services:
       - '80'
     depends_on:
       - openwa-api
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     labels:
       - 'com.openwa.service=dashboard'
       - 'com.openwa.core=true'
@@ -130,6 +150,13 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    # Postgres is chatty (checkpoints, autovacuum, connection churn), and its log is the
+    # one that fills a small VPS disk fastest.
+    logging:
+      driver: local
+      options:
+        max-size: '20m'
+        max-file: '5'
     labels:
       - 'com.openwa.service=database'
       - 'com.openwa.builtin=true'
@@ -148,6 +175,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    logging:
+      driver: local
+      options:
+        max-size: '10m'
+        max-file: '3'
     labels:
       - 'com.openwa.service=cache'
       - 'com.openwa.builtin=true'
@@ -172,6 +204,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: '20m'
+        max-file: '5'
     labels:
       - 'com.openwa.service=storage'
       - 'com.openwa.builtin=true'

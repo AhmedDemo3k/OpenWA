@@ -8,6 +8,30 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/**
+ * Waits until everything already written to a stdio stream has actually reached the OS.
+ *
+ * Writes to a pipe are asynchronous, and the pipes Docker attaches to stdout/stderr are
+ * pipes. `process.exit()` does not wait for them, so a crash handler that logs and then
+ * exits immediately can lose the very message explaining the crash — the container records
+ * a non-zero exit code and nothing else.
+ *
+ * Writing an empty string is enough: its callback fires once the stream has drained
+ * everything queued ahead of it.
+ */
+function flushStream(stream: NodeJS.WriteStream): Promise<void> {
+  if (stream.writableLength === 0) {
+    return Promise.resolve();
+  }
+  return new Promise<void>(resolve => {
+    stream.write('', () => resolve());
+  });
+}
+
+async function flushStdio(): Promise<void> {
+  await Promise.all([flushStream(process.stdout), flushStream(process.stderr)]);
+}
+
 // Configuration loading order (later sources do NOT override earlier ones):
 //   1. Process env (Docker, shell, systemd) — highest priority
 //   2. .env (project-level overrides committed/managed by the user)
@@ -76,6 +100,63 @@ async function bootstrap() {
     await app.close();
   });
 
+  // Last-resort process guards. Node's default for both of these is to terminate the
+  // process, so a single stray rejection (a transient SQLITE_BUSY on a fire-and-forget
+  // write, a plugin throwing inside an event handler) would otherwise take every WhatsApp
+  // session offline. They log loudly and exit non-zero so the orchestrator can restart us
+  // in a known-good state rather than leaving a half-broken process serving traffic.
+  //
+  // Registered only once `app` exists, because closing gracefully needs it. Anything that
+  // fails earlier is handled by the `bootstrap().catch()` below.
+  //
+  // These deliberately do *not* call `process.exit(1)` directly. Two things go wrong then:
+  //   - stdout/stderr are asynchronous when piped (which is exactly how Docker collects
+  //     them), so the fatal error itself is dropped and `docker logs` shows nothing;
+  //   - `app.close()` never runs, so Chromium is orphaned, SQLite never checkpoints its
+  //     WAL, queued webhooks and in-flight sends are lost, and the process is SIGKILLed
+  //     by the orchestrator's grace timer instead of stopping in a known state.
+  const CRASH_SHUTDOWN_BUDGET_MS = 10_000;
+  let shuttingDown = false;
+
+  const exitAfterCrash = async (label: string, detail: unknown): Promise<void> => {
+    // A second crash while we are already tearing down must not start a competing teardown.
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    console.error(`[FATAL] ${label}:`, detail);
+    if (detail instanceof Error && detail.stack) {
+      console.error(detail.stack);
+    }
+
+    // After an uncaught exception the process state is undefined, so this must be bounded:
+    // a wedged engine or a dead socket can make `app.close()` hang forever.
+    const hardTimeout = setTimeout(() => {
+      console.error('[FATAL] Graceful shutdown timed out; exiting immediately');
+      process.exit(1);
+    }, CRASH_SHUTDOWN_BUDGET_MS);
+    // Do not let this timer alone keep the process alive if close() finishes first.
+    hardTimeout.unref?.();
+
+    try {
+      await app.close();
+      console.error('[FATAL] Graceful shutdown completed');
+    } catch (closeError: unknown) {
+      console.error('[FATAL] Error during shutdown:', closeError);
+    }
+
+    clearTimeout(hardTimeout);
+    await flushStdio();
+    process.exit(1);
+  };
+
+  process.on('unhandledRejection', (reason: unknown) => {
+    void exitAfterCrash('Unhandled promise rejection', reason);
+  });
+
+  process.on('uncaughtException', (error: Error) => {
+    void exitAfterCrash('Uncaught exception', error);
+  });
+
   // Enhanced Security Headers (Phase 3 Security Audit)
   app.use(
     helmet({
@@ -125,7 +206,7 @@ async function bootstrap() {
   });
 
   // Global prefix
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', { exclude: ['/'] });
 
   // Enhanced Validation pipe with security options
   app.useGlobalPipes(
@@ -166,4 +247,14 @@ async function bootstrap() {
   console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
 }
 
-void bootstrap();
+// A boot failure (EADDRINUSE, bad DATABASE_*, migration error) must not surface as a
+// bare unhandled rejection: log it properly and exit non-zero so the supervisor reacts.
+// There is no app to close at this point, but the log still has to survive the exit.
+void bootstrap().catch(async (error: unknown) => {
+  console.error('[FATAL] Failed to start OpenWA:', error);
+  if (error instanceof Error && error.stack) {
+    console.error(error.stack);
+  }
+  await flushStdio();
+  process.exit(1);
+});

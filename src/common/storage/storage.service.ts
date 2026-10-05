@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as archiver from 'archiver';
 import * as tar from 'tar-stream';
 import { createGunzip } from 'zlib';
-import { Readable, PassThrough } from 'stream';
+import { Readable, PassThrough, pipeline } from 'stream';
 import {
   S3Client,
   ListObjectsV2Command,
@@ -133,7 +133,7 @@ export class StorageService {
     } else {
       for (const file of files) {
         try {
-          const fullPath = path.join(this.localPath, file);
+          const fullPath = this.resolveLocalPath(file);
           const stats = fs.statSync(fullPath);
           sizeBytes += stats.size;
         } catch (error) {
@@ -149,8 +149,7 @@ export class StorageService {
   // Export - Create tar.gz stream from current storage
   // ============================================================================
 
-  async createExportStream(): Promise<PassThrough> {
-    const files = await this.listFiles();
+  createExportStream(): Promise<PassThrough> {
     const output = new PassThrough();
 
     const archive = archiver.default('tar', {
@@ -158,20 +157,42 @@ export class StorageService {
       gzipOptions: { level: 6 },
     });
 
+    // An archiver failure emits 'error'; with no listener Node turns that into an
+    // uncaught exception and kills the process mid-export. Forward it to the consumer.
+    archive.on('error', (err: Error) => {
+      this.logger.error('Storage export failed', String(err));
+      output.destroy(err);
+    });
+
     archive.pipe(output);
 
-    // Add files to archive
-    for (const file of files) {
-      try {
-        const data = await this.getFile(file);
-        archive.append(data, { name: file });
-      } catch (error) {
-        this.logger.warn(`Failed to export file: ${file}`, { error: String(error) });
-      }
-    }
+    // Populate the archive in the background and hand the stream back immediately.
+    // Awaiting every file here filled the PassThrough's 16 KB buffer, after which
+    // archiver buffered the entire library in memory while nothing was draining it —
+    // an OOM waiting to happen on a real media folder.
+    void this.populateArchive(archive);
 
-    void archive.finalize();
-    return output;
+    return Promise.resolve(output);
+  }
+
+  private async populateArchive(archive: archiver.Archiver): Promise<void> {
+    try {
+      for (const file of await this.listFiles()) {
+        try {
+          const data = await this.getFile(file);
+          archive.append(data, { name: file });
+        } catch (error) {
+          this.logger.warn(`Failed to export file: ${file}`, { error: String(error) });
+        }
+      }
+
+      // finalize() returns a promise that rejects on a broken entry; discarding it with
+      // `void` turned those into unhandledRejections.
+      await archive.finalize();
+    } catch (error) {
+      this.logger.error('Storage export failed while building the archive', String(error));
+      archive.emit('error', error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   // ============================================================================
@@ -185,38 +206,67 @@ export class StorageService {
     const gunzip = createGunzip();
 
     return new Promise<number>((resolve, reject) => {
+      let settled = false;
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        fn();
+      };
+
       extract.on('entry', (header, stream, next) => {
         const chunks: Buffer[] = [];
 
+        // A failed entry must still call next(), otherwise the extractor never advances
+        // and the import hangs until the process is killed.
+        stream.on('error', (err: Error) => {
+          this.logger.error(`Failed to read archive entry: ${header.name}`, String(err));
+          next();
+        });
+
         stream.on('data', (chunk: Buffer) => chunks.push(chunk));
         stream.on('end', () => {
-          const data = Buffer.concat(chunks);
-          this.putFile(header.name, data)
-            .then(() => {
-              importedCount++;
-              this.logger.debug(`Imported file: ${header.name}`);
-              next();
-            })
-            .catch((error: unknown) => {
-              this.logger.error(`Failed to import file: ${header.name}`, String(error));
-              next();
-            });
+          void this.safeWriteEntry(header, chunks).then(imported => {
+            importedCount += imported;
+            next();
+          });
         });
         stream.resume();
       });
 
       extract.on('finish', () => {
         this.logger.log(`Import completed: ${importedCount} files`);
-        resolve(importedCount);
+        settle(() => resolve(importedCount));
       });
 
-      extract.on('error', (err: Error) => {
+      // `pipeline` forwards the first error from any stage and destroys all of them.
+      // Plain `.pipe()` chains do neither: a corrupt archive made the gunzip stage emit
+      // an unhandled 'error' event, which crashed the process, and a client that hung up
+      // mid-upload left this promise pending forever.
+      pipeline(inputStream, gunzip, extract, err => {
+        if (!err) return;
         this.logger.error('Import failed', String(err));
-        reject(err);
+        settle(() => reject(err));
       });
-
-      inputStream.pipe(gunzip).pipe(extract);
     });
+  }
+
+  /** Writes one archive entry, refusing names that would escape the storage root. */
+  private async safeWriteEntry(header: { name: string; type?: string }, chunks: Buffer[]): Promise<number> {
+    // Directories carry no payload; tar-stream still expects next() for them.
+    if (header.type === 'directory') return 0;
+    if (header.type === 'link' || header.type === 'symlink') {
+      this.logger.warn(`Skipped link entry in archive: ${header.name}`);
+      return 0;
+    }
+
+    try {
+      await this.putFile(header.name, Buffer.concat(chunks));
+      this.logger.debug(`Imported file: ${header.name}`);
+      return 1;
+    } catch (error: unknown) {
+      this.logger.error(`Failed to import file: ${header.name}`, String(error));
+      return 0;
+    }
   }
 
   // ============================================================================
@@ -246,13 +296,32 @@ export class StorageService {
     return files;
   }
 
+  /**
+   * Resolves a caller-supplied relative path inside the storage root, refusing anything
+   * that escapes it.
+   *
+   * `path.join` happily collapses `..` segments, so an imported tar entry named
+   * `../../../../etc/cron.d/x` would otherwise be written outside `localPath` — an
+   * arbitrary-file-write from any endpoint that accepts an upload.
+   */
+  private resolveLocalPath(filePath: string): string {
+    const root = path.resolve(this.localPath);
+    const resolved = path.resolve(root, filePath);
+
+    const isInside = resolved === root || resolved.startsWith(root + path.sep);
+    if (!isInside) {
+      throw new Error(`Path escapes the storage root: ${filePath}`);
+    }
+    return resolved;
+  }
+
   private getLocalFile(filePath: string): Promise<Buffer> {
-    const fullPath = path.join(this.localPath, filePath);
+    const fullPath = this.resolveLocalPath(filePath);
     return Promise.resolve(fs.readFileSync(fullPath));
   }
 
   private putLocalFile(filePath: string, data: Buffer): Promise<void> {
-    const fullPath = path.join(this.localPath, filePath);
+    const fullPath = this.resolveLocalPath(filePath);
     const dir = path.dirname(fullPath);
 
     if (!fs.existsSync(dir)) {

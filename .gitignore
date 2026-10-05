@@ -72,3 +72,29 @@ uploads/
 docs/plans/
 CLAUDE.md
 _docs/
+
+# Local installers and archives
+# tools/ holds a downloaded chrome-setup.exe and node-*.msi (~250MB) that were fetched by a
+# setup script. Build artifacts like this belong in a cache, never in the repository.
+tools/
+*.exe
+*.msi
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# Runtime state written by local helper scripts
+*.pid
+*.pid.lock
+
+# Chat history / conversation dumps.
+# auto-reply-bot/extracted-chats/ held 260 exported .txt chats plus chat-history*.txt. This is
+# private message content and must never be committed; the whole scratch project is ignored.
+auto-reply-bot/
+
+# Scratch output from manual debugging
+# e.g. the WhatsApp QR screenshots saved while pairing a phone by hand.
+wa_qr*.png
+fix_funnel_log.txt
+*.err

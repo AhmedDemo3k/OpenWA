@@ -391,3 +391,44 @@ export const pluginsApi = {
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),
 };
+
+// =============================================================================
+// Bot API (Auto-Reply Bot on port 3001)
+// =============================================================================
+
+const BOT_API = '/bot-api';
+
+export const botApi = {
+  stats: () => fetch(`${BOT_API}/api/stats`).then(r => r.json()),
+  style: () => fetch(`${BOT_API}/api/style`).then(r => r.json()),
+  reanalyzeStyle: () => fetch(`${BOT_API}/api/style?reanalyze=true`).then(r => r.json()),
+  rules: {
+    list: () => fetch(`${BOT_API}/api/rules`).then(r => r.json()),
+    add: (trigger: string, response: string) =>
+      fetch(`${BOT_API}/api/rules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trigger, response }),
+      }).then(r => r.json()),
+    remove: (id: string) =>
+      fetch(`${BOT_API}/api/rules/${id}`, { method: 'DELETE' }).then(r => r.json()),
+  },
+  memory: {
+    list: () => fetch(`${BOT_API}/api/memory`).then(r => r.json()),
+    get: (chatId: string) => fetch(`${BOT_API}/api/memory/${chatId}`).then(r => r.json()),
+    clear: (chatId: string) =>
+      fetch(`${BOT_API}/api/memory/${chatId}`, { method: 'DELETE' }).then(r => r.json()),
+  },
+  chatHistory: () => fetch(`${BOT_API}/api/chat-history`).then(r => r.json()),
+  clean: (rawText: string) =>
+    fetch(`${BOT_API}/api/clean`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rawText }),
+    }).then(r => r.json()),
+  extract: {
+    start: () =>
+      fetch(`${BOT_API}/api/chats/extract`, { method: 'POST' }).then(r => r.json()),
+    status: () => fetch(`${BOT_API}/api/chats/extract/status`).then(r => r.json()),
+  },
+};

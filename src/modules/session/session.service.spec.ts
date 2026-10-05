@@ -8,6 +8,23 @@ import { EngineFactory } from '../../engine/engine.factory';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
+import { EngineEventCallbacks, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+
+/**
+ * Callbacks are optional on the real interface; these tests drive them directly, so the
+ * lifecycle ones are required. `onMessage` is required too -- leaving it optional made
+ * `callbacks.onMessage(...)` an "object possibly undefined" call under the root tsconfig.
+ */
+type CapturedCallbacks = Required<
+  Pick<EngineEventCallbacks, 'onQRCode' | 'onReady' | 'onDisconnected' | 'onStateChanged' | 'onMessage'>
+> &
+  Record<string, unknown>;
+
+/** The callback bag the service passed to `engine.initialize()`. */
+function firstEngineCallbacks(initialize: jest.Mock): CapturedCallbacks {
+  const calls = initialize.mock.calls as [CapturedCallbacks][];
+  return calls[0][0];
+}
 
 function createMockSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -214,7 +231,7 @@ describe('SessionService', () => {
   // ── start ─────────────────────────────────────────────────────────
 
   describe('start', () => {
-    it('should create engine and set status to INITIALIZING', async () => {
+    it('should create engine and persist INITIALIZING when the engine reports it', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
@@ -223,9 +240,38 @@ describe('SessionService', () => {
 
       expect(engineFactory.create).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'test-session' }));
       expect(mockEngine.initialize).toHaveBeenCalled();
+
+      // INITIALIZING is persisted from the engine's own `setStatus()` via `onStateChanged`,
+      // not written by `start()` itself. See the "QR race" note in initializeEngine().
+      const callbacks = firstEngineCallbacks(mockEngine.initialize);
+      callbacks.onStateChanged(EngineStatus.INITIALIZING);
+
       expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', {
         status: SessionStatus.INITIALIZING,
       });
+    });
+
+    it('should not overwrite QR_READY when the engine emits a QR during initialize', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // whatsapp-web.js emits `qr` while `initialize()` is still awaiting. The old
+      // `start()` wrote INITIALIZING *after* that await resolved, clobbering the QR and
+      // leaving the API stuck on `initializing` for ~61s on a real browser.
+      mockEngine.initialize.mockImplementation((cb: CapturedCallbacks) => {
+        cb.onStateChanged(EngineStatus.INITIALIZING);
+        cb.onQRCode('data:image/png;base64,AAAA');
+        return Promise.resolve();
+      });
+
+      await service.start('sess-uuid-1');
+
+      const statuses = (repository.update as jest.Mock).mock.calls.map(
+        (call: [string, { status: SessionStatus }]) => call[1].status,
+      );
+      expect(statuses).toContain(SessionStatus.INITIALIZING);
+      expect(statuses[statuses.length - 1]).toBe(SessionStatus.QR_READY);
     });
 
     it('should throw BadRequestException if session already started', async () => {
@@ -391,6 +437,286 @@ describe('SessionService', () => {
 
       expect(mockEngine.destroy).toHaveBeenCalled();
       expect(service.getActiveCount()).toBe(0);
+    });
+
+    it('keeps tearing down remaining engines when one destroy() rejects', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      const failingEngine = {
+        ...mockEngine,
+        destroy: jest.fn().mockRejectedValue(new Error('browser wedged')),
+      };
+      const healthyEngine = {
+        ...mockEngine,
+        destroy: jest.fn().mockResolvedValue(undefined),
+      };
+      (engineFactory.create as jest.Mock).mockReturnValueOnce(failingEngine).mockReturnValueOnce(healthyEngine);
+
+      (repository.findOne as jest.Mock)
+        .mockResolvedValueOnce(session) // start #1 (sess-uuid-1)
+        .mockResolvedValueOnce(createMockSession({ id: 'sess-2' })) // start #2 (sess-2)
+        .mockResolvedValue(session);
+
+      await service.start('sess-uuid-1');
+      await service.start('sess-2');
+      expect(service.getActiveCount()).toBe(2);
+
+      // A rejecting engine must not abort the loop and strand the other browser.
+      await expect(service.onModuleDestroy()).resolves.toBeUndefined();
+
+      expect(failingEngine.destroy).toHaveBeenCalled();
+      expect(healthyEngine.destroy).toHaveBeenCalled();
+      expect(service.getActiveCount()).toBe(0);
+    });
+  });
+
+  // ── Stability: concurrency ───────────────────────────────────────
+
+  describe('concurrent lifecycle safety', () => {
+    it('rejects a second concurrent start() instead of orphaning a browser', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // Make initialize() slow enough that both calls overlap if unguarded.
+      let releaseInit: () => void = () => undefined;
+      const initGate = new Promise<void>(resolve => {
+        releaseInit = resolve;
+      });
+      mockEngine.initialize.mockImplementation(async () => {
+        await initGate;
+      });
+
+      const first = service.start('sess-uuid-1');
+      const second = service.start('sess-uuid-1');
+
+      releaseInit();
+      await first;
+      await expect(second).rejects.toThrow(BadRequestException);
+
+      // Exactly one engine must have been created, not two.
+      expect(engineFactory.create).toHaveBeenCalledTimes(1);
+      expect(service.getActiveCount()).toBe(1);
+    });
+
+    it('does not register an engine when initialize() fails, and destroys the half-built one', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      mockEngine.initialize.mockRejectedValue(new Error('chromium failed to start'));
+
+      await expect(service.start('sess-uuid-1')).rejects.toThrow('chromium failed to start');
+
+      // Phantom map entries made every later start() reply "already started".
+      expect(service.getActiveCount()).toBe(0);
+      // The partially launched browser must not be leaked.
+      expect(mockEngine.destroy).toHaveBeenCalled();
+
+      // Recovery: a subsequent start must be able to succeed.
+      mockEngine.initialize.mockResolvedValue(undefined);
+      await expect(service.start('sess-uuid-1')).resolves.toBeDefined();
+      expect(service.getActiveCount()).toBe(1);
+    });
+
+    it('delete() succeeds even when engine.destroy() rejects', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (repository.remove as jest.Mock).mockResolvedValue(session);
+
+      await service.start('sess-uuid-1');
+      mockEngine.destroy.mockRejectedValue(new Error('teardown failed'));
+
+      await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
+      expect(service.getActiveCount()).toBe(0);
+    });
+
+    it('stop() succeeds even when engine.disconnect() rejects', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.start('sess-uuid-1');
+      mockEngine.disconnect.mockRejectedValue(new Error('socket gone'));
+
+      await expect(service.stop('sess-uuid-1')).resolves.toBeDefined();
+      expect(service.getActiveCount()).toBe(0);
+    });
+  });
+
+  // ── Stability: engine callbacks never reject ────────────────────
+
+  describe('engine callback isolation', () => {
+    /** Grabs the callbacks handed to engine.initialize(). */
+    async function startAndCaptureCallbacks(): Promise<CapturedCallbacks> {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      return firstEngineCallbacks(mockEngine.initialize);
+    }
+
+    it('does not produce an unhandled rejection when a DB write fails on message', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+
+      try {
+        const callbacks = await startAndCaptureCallbacks();
+        // Simulate a transient SQLITE_BUSY on the lastActiveAt touch.
+        (repository.update as jest.Mock).mockRejectedValue(new Error('SQLITE_BUSY: database is locked'));
+
+        callbacks.onMessage({ id: 'm1', from: '628@c.us', body: 'hi' } as never);
+        callbacks.onQRCode('data:image/png;base64,AAAA');
+
+        // Let the microtask queue and the rejection-detection turn run.
+        await new Promise(r => setTimeout(r, 50));
+
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    });
+
+    it('does not produce an unhandled rejection when a plugin throws on message', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+
+      try {
+        const callbacks = await startAndCaptureCallbacks();
+        (hookManager.execute as jest.Mock).mockRejectedValue(new Error('plugin exploded'));
+        (webhookService.dispatch as jest.Mock).mockRejectedValue(new Error('webhook db down'));
+
+        callbacks.onMessage({ id: 'm2', from: '628@c.us', body: 'hi' } as never);
+
+        await new Promise(r => setTimeout(r, 50));
+
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    });
+
+    it('does not produce an unhandled rejection when a status update fails', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+
+      try {
+        const callbacks = await startAndCaptureCallbacks();
+        (repository.update as jest.Mock).mockRejectedValue(new Error('write failed'));
+
+        callbacks.onReady('628123', 'Test');
+        callbacks.onStateChanged('DISCONNECTED' as never);
+
+        await new Promise(r => setTimeout(r, 50));
+
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    });
+  });
+
+  // ── Stability: reconnect behaviour ───────────────────────────────
+
+  describe('reconnect policy', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    /**
+     * Drives a session to READY and then disconnects it, capturing the callback used to
+     * emit each lifecycle event.
+     */
+    async function primeReadySession(): Promise<CapturedCallbacks> {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      return firstEngineCallbacks(mockEngine.initialize);
+    }
+
+    it('does NOT auto-reconnect after an explicit logout', async () => {
+      const callbacks = await primeReadySession();
+
+      // whatsapp-web.js reports a user-requested logout as this disconnect reason.
+      callbacks.onDisconnected('LOGOUT');
+
+      // A logout needs a fresh QR scan, so retrying is pointless churn.
+      expect(jest.getTimerCount()).toBe(0);
+      expect(service.getActiveCount()).toBe(1);
+    });
+
+    it('does NOT auto-reconnect after an authentication failure', async () => {
+      const callbacks = await primeReadySession();
+
+      callbacks.onDisconnected('Authentication failed');
+
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('does NOT auto-reconnect after a ban/block', async () => {
+      const callbacks = await primeReadySession();
+
+      callbacks.onDisconnected('device banned');
+
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('still schedules a reconnect for a transient network drop', async () => {
+      const callbacks = await primeReadySession();
+
+      callbacks.onDisconnected('connection lost');
+
+      expect(jest.getTimerCount()).toBe(1);
+    });
+
+    it('gives up instead of looping forever when a session keeps flapping', async () => {
+      const callbacks = await primeReadySession();
+
+      // Simulate repeated connect-then-immediately-drop cycles. Each `onReady` inside the
+      // flap window must count as a flap rather than resetting the attempt counter,
+      // otherwise maxAttempts is never reached and this loops indefinitely.
+      for (let i = 0; i < 5; i++) {
+        callbacks.onReady('628123', 'Test');
+        callbacks.onDisconnected('connection lost');
+        // Run whatever reconnect timer is pending so the next cycle starts clean.
+        jest.runOnlyPendingTimers();
+        await Promise.resolve();
+        await Promise.resolve();
+      }
+
+      // After the flap budget is spent, no further reconnect may be scheduled.
+      callbacks.onReady('628123', 'Test');
+      callbacks.onDisconnected('connection lost');
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('resets the flap counter after a genuinely stable connection', async () => {
+      const callbacks = await primeReadySession();
+
+      callbacks.onReady('628123', 'Test');
+      // Move past the flap window so this connection counts as stable.
+      jest.advanceTimersByTime(120_000);
+      callbacks.onReady('628123', 'Test');
+      callbacks.onDisconnected('connection lost');
+
+      // A stable session must still be eligible for reconnection.
+      expect(jest.getTimerCount()).toBe(1);
     });
   });
 });

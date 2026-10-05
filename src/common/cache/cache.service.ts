@@ -59,6 +59,13 @@ export class CacheService implements OnModuleDestroy {
     this.connecting = true;
     this.connectionAttempts++;
 
+    // A previous client may still be alive but failing pings (ioredis auto-reconnects, so
+    // a ping can fail while the socket is being re-established). Overwriting the
+    // reference without closing it orphans a client that keeps its own socket and
+    // reconnect timer for the rest of the process lifetime. Because tryConnect() runs on
+    // every cache read/write, a Redis outage would leak a new client each time.
+    this.discardClient();
+
     try {
       const host = process.env.REDIS_HOST || this.configService.get<string>('REDIS_HOST', 'localhost');
       const port = parseInt(process.env.REDIS_PORT || '', 10) || this.configService.get<number>('REDIS_PORT', 6379);
@@ -93,9 +100,26 @@ export class CacheService implements OnModuleDestroy {
       return true;
     } catch (error) {
       this.logger.warn(`Redis connection failed (attempt ${this.connectionAttempts}): ${String(error)}`);
-      this.redis = null;
+      this.discardClient();
       this.connecting = false;
       return false;
+    }
+  }
+
+  /**
+   * Drops the current client reference and force-closes its socket. Safe to call when
+   * there is no client.
+   */
+  private discardClient(): void {
+    const client = this.redis;
+    this.redis = null;
+    if (!client) return;
+    try {
+      // `disconnect` tears the socket down immediately; `quit` would wait for in-flight
+      // commands, which is not what we want when replacing a wedged client.
+      client.disconnect();
+    } catch (error) {
+      this.logger.debug(`Failed to close previous Redis client: ${String(error)}`);
     }
   }
 
@@ -111,8 +135,19 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (this.redis) {
-      await this.redis.quit();
+    const client = this.redis;
+    this.redis = null;
+    if (client) {
+      try {
+        await client.quit();
+      } catch (error) {
+        this.logger.warn(`Failed to close Redis client on shutdown: ${String(error)}`);
+        try {
+          client.disconnect();
+        } catch {
+          // Nothing further we can do during teardown.
+        }
+      }
     }
   }
 
@@ -259,11 +294,26 @@ export class CacheService implements OnModuleDestroy {
 
   async invalidateAll(): Promise<void> {
     if (!(await this.isAvailable())) return;
+    const client = this.redis;
+    if (!client) return;
     try {
-      const keys = await this.redis!.keys('session:*');
-      keys.push('sessions:list', 'sessions:stats');
-      if (keys.length > 0) {
-        await this.redis!.del(...keys);
+      // SCAN instead of KEYS. `KEYS` is O(N) over the whole keyspace and blocks the Redis
+      // single-threaded server for the duration, so a large keyspace would stall every
+      // other client on that instance. SCAN is incremental and non-blocking.
+      const found: string[] = [];
+      let cursor = '0';
+      do {
+        const [next, batch] = await client.scan(cursor, 'MATCH', 'session:*', 'COUNT', 200);
+        cursor = next;
+        found.push(...batch);
+      } while (cursor !== '0');
+
+      found.push('sessions:list', 'sessions:stats');
+      if (found.length > 0) {
+        // DEL is variadic; chunk so a huge key list cannot produce one oversized command.
+        for (let i = 0; i < found.length; i += 500) {
+          await client.del(...found.slice(i, i + 500));
+        }
       }
     } catch (error) {
       this.logger.warn(`Cache invalidation failed: ${String(error)}`);

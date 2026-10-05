@@ -23,9 +23,11 @@ import { StorageModule } from './common/storage/storage.module';
 import { StatsModule } from './modules/stats/stats.module';
 import { StatusModule } from './modules/status/status.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
+import { RootModule } from './modules/root/root.module';
 import { HooksModule } from './core/hooks';
 import { PluginsModule } from './core/plugins';
 import { PluginsApiModule } from './modules/plugins/plugins.module';
+import { withSqlitePragmas } from './database/sqlite-options';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -50,13 +52,23 @@ if (process.env.QUEUE_ENABLED === 'true') {
       name: 'main',
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'sqlite' as const,
-        database: configService.get<string>('database.database', './data/main.sqlite'),
-        entities: [__dirname + '/modules/auth/**/*.entity{.ts,.js}', __dirname + '/modules/audit/**/*.entity{.ts,.js}'],
-        synchronize: true,
-        logging: configService.get<boolean>('database.logging', false),
-      }),
+      useFactory: (configService: ConfigService) =>
+        withSqlitePragmas({
+          // `name` must be echoed back here, not just passed to forRootAsync().
+          // TypeOrmCoreModule.onApplicationShutdown() resolves its DataSource via
+          // getDataSourceToken(this.options) on the object this factory returns; without
+          // `name` that resolves to the bare `DataSource` class token, which nothing
+          // provides, so the lookup throws and the connection is never destroyed.
+          name: 'main' as const,
+          type: 'sqlite' as const,
+          database: configService.get<string>('database.database', './data/main.sqlite'),
+          entities: [
+            __dirname + '/modules/auth/**/*.entity{.ts,.js}',
+            __dirname + '/modules/audit/**/*.entity{.ts,.js}',
+          ],
+          synchronize: true,
+          logging: configService.get<boolean>('database.logging', false),
+        }),
     }),
 
     // Data Storage Database (pluggable - user data)
@@ -79,6 +91,9 @@ if (process.env.QUEUE_ENABLED === 'true') {
         if (dbType === 'postgres') {
           return {
             ...baseConfig,
+            // See the `name` note on the 'main' connection above: without it the
+            // shutdown hook cannot resolve the DataSource and leaks the connection.
+            name: 'data' as const,
             type: 'postgres' as const,
             host: configService.get<string>('dataDatabase.host'),
             port: configService.get<number>('dataDatabase.port'),
@@ -99,13 +114,15 @@ if (process.env.QUEUE_ENABLED === 'true') {
         // SQLite: zero-config. Default to synchronize=true so the embedded
         // database "just works" on first boot without a separate migration step.
         // Users can opt out with DATABASE_SYNCHRONIZE=false to use migrations instead.
-        return {
+        const synchronize = configService.get<boolean>('dataDatabase.synchronize', true);
+        return withSqlitePragmas({
           ...baseConfig,
+          name: 'data' as const,
           type: 'sqlite' as const,
           database: configService.get<string>('dataDatabase.database', './data/openwa.sqlite'),
-          synchronize: configService.get<boolean>('dataDatabase.synchronize', true),
-          migrationsRun: !configService.get<boolean>('dataDatabase.synchronize', true),
-        };
+          synchronize,
+          migrationsRun: !synchronize,
+        });
       },
     }),
 
@@ -159,6 +176,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
     StatusModule, // Phase 3: Status/Stories API
     CatalogModule, // Phase 3: Catalog API (WhatsApp Business)
     PluginsApiModule, // Phase 5: Plugins API
+    RootModule, // Root / landing page
   ],
 })
 export class AppModule {}
