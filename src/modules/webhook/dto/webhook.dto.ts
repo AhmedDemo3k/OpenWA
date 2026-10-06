@@ -118,9 +118,50 @@ export class WebhookResponseDto {
   @ApiPropertyOptional()
   lastTriggeredAt?: Date | null;
 
+  @ApiPropertyOptional()
+  lastSuccessAt?: Date | null;
+
+  @ApiPropertyOptional()
+  lastFailureAt?: Date | null;
+
+  @ApiPropertyOptional()
+  lastAttemptAt?: Date | null;
+
+  @ApiPropertyOptional()
+  lastStatusCode?: number | null;
+
+  @ApiPropertyOptional()
+  lastError?: string | null;
+
+  @ApiPropertyOptional()
+  consecutiveFailures?: number;
+
   @ApiProperty()
   createdAt: Date;
 
   @ApiProperty()
   updatedAt: Date;
+}
+
+export class WebhookDeliveryDto {
+  @ApiProperty({ description: 'BullMQ job id of the failed delivery' })
+  jobId: string;
+
+  @ApiProperty({ description: 'Event that triggered the delivery' })
+  event: string;
+
+  @ApiProperty({ description: 'Delivery id sent in the X-OpenWA-Delivery-Id header' })
+  deliveryId: string;
+
+  @ApiProperty({ description: 'Attempts made before the job was dead-lettered' })
+  attemptsMade: number;
+
+  @ApiProperty({ description: 'Reason the job failed' })
+  failedReason: string;
+
+  @ApiPropertyOptional({ description: 'When the delivery was first attempted' })
+  timestamp: Date | null;
+
+  @ApiProperty({ description: 'Target URL at time of delivery' })
+  url: string;
 }

@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Repository } from 'typeorm';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { WebhookService, WebhookPayload } from './webhook.service';
@@ -22,6 +22,12 @@ function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
     active: true,
     retryCount: 3,
     lastTriggeredAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    lastAttemptAt: null,
+    lastStatusCode: null,
+    lastError: null,
+    consecutiveFailures: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
     session: undefined as unknown as Session,
@@ -402,6 +408,124 @@ describe('WebhookService', () => {
           backoff: expect.objectContaining({ type: 'exponential' }),
         }),
       );
+    });
+  });
+
+  // ── dead-letter queue (BullMQ queue mode) ─────────────────────────
+
+  describe('dead-letter operations', () => {
+    function makeQueueService(): Promise<TestingModule> {
+      return Test.createTestingModule({
+        providers: [
+          WebhookService,
+          { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn().mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+                if (key === 'queue.enabled') return true;
+                if (key === 'webhook.retryDelay') return 5000;
+                return def as T;
+              }),
+            },
+          },
+          { provide: HookManager, useValue: hookManager },
+          { provide: getQueueToken(QUEUE_NAMES.WEBHOOK), useValue: webhookQueue },
+        ],
+      }).compile();
+    }
+
+    const failedJob = (overrides: Record<string, unknown> = {}) =>
+      ({
+        id: 'job-1',
+        name: 'webhook-wh-uuid-1',
+        data: {
+          webhookId: 'wh-uuid-1',
+          event: 'message.received',
+          url: 'https://example.com/webhook',
+          payload: { deliveryId: 'del-1', sessionId: 'sess-1' },
+        },
+        attemptsMade: 3,
+        failedReason: 'HTTP 500: Internal Server Error',
+        timestamp: 1728200000000,
+        remove: jest.fn().mockResolvedValue(jest.fn()),
+        retry: jest.fn().mockResolvedValue(jest.fn()),
+        ...overrides,
+      }) as unknown as Record<string, unknown>;
+
+    it('lists only failed jobs belonging to the webhook and maps their fields', async () => {
+      webhookQueue.getFailed = jest.fn().mockResolvedValue([
+        failedJob(),
+        // A dead-lettered job for a different webhook on the shared queue.
+        failedJob({ id: 'job-2', name: 'webhook-other-uuid' }),
+      ]);
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook());
+
+      const queueService = await makeQueueService();
+      const result = await queueService.get(WebhookService).listDeadLetters('sess-1', 'wh-uuid-1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual(
+        expect.objectContaining({
+          jobId: 'job-1',
+          event: 'message.received',
+          deliveryId: 'del-1',
+          attemptsMade: 3,
+          failedReason: 'HTTP 500: Internal Server Error',
+        }),
+      );
+    });
+
+    it('rejects dead-letter operations when the queue is disabled', async () => {
+      const queueService = service; // outer module has queue.enabled = false
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook());
+
+      await expect(queueService.listDeadLetters('sess-1', 'wh-uuid-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects dead-letter operations for a webhook owned by another session', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook({ sessionId: 'sess-other' }));
+      webhookQueue.getFailed = jest.fn().mockResolvedValue([]);
+
+      const queueService = await makeQueueService();
+      await expect(queueService.get(WebhookService).listDeadLetters('sess-1', 'wh-uuid-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('requeues a dead-lettered delivery via job.retry', async () => {
+      const retry = jest.fn().mockResolvedValue(undefined);
+      webhookQueue.getJob = jest.fn().mockResolvedValue(failedJob({ retry }));
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook());
+
+      const queueService = await makeQueueService();
+      const result = await queueService.get(WebhookService).retryDeadLetter('sess-1', 'wh-uuid-1', 'job-1');
+
+      expect(retry).toHaveBeenCalled();
+      expect(result).toEqual({ jobId: 'job-1', retried: true });
+    });
+
+    it('rejects retrying a job that does not belong to the webhook', async () => {
+      webhookQueue.getJob = jest.fn().mockResolvedValue(failedJob({ name: 'webhook-someone-else' }));
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook());
+
+      const queueService = await makeQueueService();
+      const svc = queueService.get(WebhookService);
+
+      await expect(svc.retryDeadLetter('sess-1', 'wh-uuid-1', 'job-1')).rejects.toThrow(NotFoundException);
+      expect(webhookQueue.getJob).toHaveBeenCalledWith('job-1');
+    });
+
+    it('discards a dead-lettered delivery via job.remove', async () => {
+      const remove = jest.fn().mockResolvedValue(undefined);
+      webhookQueue.getJob = jest.fn().mockResolvedValue(failedJob({ remove }));
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook());
+
+      const queueService = await makeQueueService();
+      const result = await queueService.get(WebhookService).removeDeadLetter('sess-1', 'wh-uuid-1', 'job-1');
+
+      expect(remove).toHaveBeenCalled();
+      expect(result).toEqual({ jobId: 'job-1', removed: true });
     });
   });
 });

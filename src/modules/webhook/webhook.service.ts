@@ -1,15 +1,16 @@
-import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
+import { Queue, Job } from 'bullmq';
 import * as crypto from 'crypto';
 import { Webhook } from './entities/webhook.entity';
-import { CreateWebhookDto, UpdateWebhookDto } from './dto';
+import { CreateWebhookDto, UpdateWebhookDto, WebhookDeliveryDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
+import { recordDeliveryOutcome } from './utils/delivery-stats.util';
 import { HookManager } from '../../core/hooks';
 
 export interface WebhookPayload {
@@ -323,21 +324,38 @@ export class WebhookService {
       });
 
       if (!response.ok) {
+        // Drain the body so undici can release the socket before we retry.
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      // Update last triggered timestamp
-      await this.webhookRepository.update(webhook.id, {
-        lastTriggeredAt: new Date(),
+      await response.body?.cancel().catch(() => undefined);
+
+      // Record delivery telemetry (lastSuccessAt, lastAttemptAt, lastStatusCode,
+      // consecutiveFailures reset). This is deliberately best-effort: a row that could
+      // not be updated must not be reported to the caller as an undelivered webhook.
+      await recordDeliveryOutcome(this.webhookRepository, webhook.id, {
+        ok: true,
+        at: new Date(),
+        statusCode: response.status,
+      }).catch((statsError: unknown) => {
+        this.logger.warn('Failed to record webhook delivery stats', {
+          webhookId: webhook.id,
+          action: 'webhook_stats_failed',
+          error: statsError instanceof Error ? statsError.message : String(statsError),
+        });
       });
 
       this.logger.debug(`Webhook delivered to ${webhook.id}`, {
         webhookId: webhook.id,
         deliveryId: payload.deliveryId,
+        attempt,
         action: 'webhook_delivered',
       });
     } catch (error) {
-      this.logger.error(`Webhook delivery failed for ${webhook.id}`, String(error), {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      this.logger.error(`Webhook delivery failed for ${webhook.id}`, errorMessage, {
         webhookId: webhook.id,
         attempt,
         deliveryId: payload.deliveryId,
@@ -346,11 +364,123 @@ export class WebhookService {
 
       if (attempt < webhook.retryCount) {
         const delay = this.configService.get<number>('webhook.retryDelay', 5000);
-        await this.delay(delay * attempt);
+        // Exponential backoff, matching the queued path: delay, 2x, 4x, ...
+        await this.delay(delay * 2 ** (attempt - 1));
         return this.deliverWebhook(webhook, payload, headers, attempt + 1);
       }
+
+      // Terminal failure: persist the failure telemetry before propagating.
+      await recordDeliveryOutcome(this.webhookRepository, webhook.id, {
+        ok: false,
+        at: new Date(),
+        error: errorMessage,
+      }).catch(() => undefined);
+
       throw error;
     }
+  }
+
+  /**
+   * List dead-lettered (retry-exhausted) deliveries for a webhook from the BullMQ failed
+   * set. `removeOnFail` in the queue config retains the last 5000 failures, so this is a
+   * bounded, inspectable DLQ without a side database.
+   */
+  async listDeadLetters(sessionId: string, webhookId: string, limit = 50): Promise<WebhookDeliveryDto[]> {
+    const webhook = await this.findOwned(sessionId, webhookId);
+    const queue = this.requireQueue();
+
+    const failed = await queue.getFailed(0, Math.max(1, Math.min(limit, 500)) - 1);
+    return failed.filter(job => job.name === `webhook-${webhook.id}`).map(job => this.jobToDeliveryDto(job));
+  }
+
+  /**
+   * Requeue a dead-lettered delivery so it is attempted again from scratch.
+   */
+  async retryDeadLetter(
+    sessionId: string,
+    webhookId: string,
+    jobId: string,
+  ): Promise<{ jobId: string; retried: true }> {
+    await this.findOwned(sessionId, webhookId);
+    const queue = this.requireQueue();
+    const job = await this.findOwnedJob(queue, webhookId, jobId);
+
+    await job.retry();
+
+    this.logger.log(`Requeued dead-lettered webhook delivery`, {
+      webhookId,
+      jobId: job.id as string,
+      action: 'webhook_dlq_retried',
+      event: job.data.event,
+      deliveryId: job.data.payload.deliveryId,
+    });
+
+    return { jobId: job.id as string, retried: true };
+  }
+
+  /**
+   * Discard a dead-lettered delivery permanently.
+   */
+  async removeDeadLetter(
+    sessionId: string,
+    webhookId: string,
+    jobId: string,
+  ): Promise<{ jobId: string; removed: true }> {
+    await this.findOwned(sessionId, webhookId);
+    const queue = this.requireQueue();
+    const job = await this.findOwnedJob(queue, webhookId, jobId);
+
+    await job.remove();
+
+    this.logger.log(`Discarded dead-lettered webhook delivery`, {
+      webhookId,
+      jobId: job.id as string,
+      action: 'webhook_dlq_removed',
+    });
+
+    return { jobId: job.id as string, removed: true };
+  }
+
+  private async findOwned(sessionId: string, webhookId: string): Promise<Webhook> {
+    const webhook = await this.findOne(webhookId);
+    if (webhook.sessionId !== sessionId) {
+      // Treat a cross-session reference as not-found rather than leaking existence.
+      throw new NotFoundException(`Webhook with id '${webhookId}' not found`);
+    }
+    return webhook;
+  }
+
+  private requireQueue(): Queue<WebhookJobData> {
+    if (!this.queueEnabled || !this.webhookQueue) {
+      throw new BadRequestException(
+        'The BullMQ webhook queue is disabled (queue.enabled=false); dead-letter operations need it',
+      );
+    }
+    return this.webhookQueue;
+  }
+
+  private async findOwnedJob(
+    queue: Queue<WebhookJobData>,
+    webhookId: string,
+    jobId: string,
+  ): Promise<Job<WebhookJobData>> {
+    const job = await queue.getJob(jobId);
+    if (!job || job.name !== `webhook-${webhookId}`) {
+      throw new NotFoundException(`Dead-lettered delivery '${jobId}' not found for webhook '${webhookId}'`);
+    }
+    return job;
+  }
+
+  private jobToDeliveryDto(job: Job<WebhookJobData>): WebhookDeliveryDto {
+    return {
+      jobId: job.id as string,
+      event: job.data.event,
+      deliveryId: job.data.payload.deliveryId,
+      attemptsMade: job.attemptsMade ?? 0,
+      failedReason: job.failedReason ?? '',
+      timestamp: job.timestamp ? new Date(job.timestamp) : null,
+      url: job.data.url,
+    };
   }
 
   private generateSignature(payload: string, secret: string): string {

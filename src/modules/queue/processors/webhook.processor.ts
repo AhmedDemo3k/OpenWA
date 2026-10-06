@@ -7,6 +7,7 @@ import { createLogger } from '../../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue-names';
 import { WebhookJobData } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
+import { recordDeliveryOutcome } from '../../webhook/utils/delivery-stats.util';
 import { HookManager } from '../../../core/hooks';
 
 export interface WebhookJobResult {
@@ -49,6 +50,8 @@ export class WebhookProcessor extends WorkerHost {
       'X-OpenWA-Retry-Count': String(job.attemptsMade),
     };
 
+    let failureStatusCode: number | null = null;
+
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -63,6 +66,7 @@ export class WebhookProcessor extends WorkerHost {
       const success = response.ok;
 
       if (!success) {
+        failureStatusCode = response.status;
         // Drain the body so undici can release the socket back to the pool instead of
         // holding it until GC. A slow-to-read error response would otherwise accumulate
         // open connections across retries.
@@ -72,19 +76,20 @@ export class WebhookProcessor extends WorkerHost {
 
       await response.body?.cancel().catch(() => undefined);
 
-      // Update lastTriggeredAt on successful delivery.
-      // Deliberately NOT allowed to fail the job: the endpoint already received the
-      // payload, so throwing here would make BullMQ redeliver a message that was in fact
-      // delivered, producing duplicates for the consumer.
-      await this.webhookRepository.update(webhookId, { lastTriggeredAt: new Date() }).catch((error: unknown) => {
-        this.logger.warn('Failed to record webhook delivery timestamp', {
+      // Record delivery telemetry. Deliberately NOT allowed to fail the job: the endpoint
+      // already received the payload, so throwing here would make BullMQ redeliver a
+      // message that was in fact delivered, producing duplicates for the consumer.
+      await recordDeliveryOutcome(this.webhookRepository, webhookId, {
+        ok: true,
+        at: new Date(),
+        statusCode: response.status,
+      }).catch((error: unknown) => {
+        this.logger.warn('Failed to record webhook delivery stats', {
           webhookId,
-          action: 'webhook_touch_failed',
+          action: 'webhook_stats_failed',
           error: error instanceof Error ? error.message : String(error),
         });
       });
-
-      // Execute hook after successful delivery
       await this.hookManager.execute(
         'webhook:delivered',
         {
@@ -157,6 +162,15 @@ export class WebhookProcessor extends WorkerHost {
           });
       }
 
+      // Record failure telemetry on every failed attempt. Best-effort: a stats write must
+      // never mask the original delivery failure.
+      await recordDeliveryOutcome(this.webhookRepository, webhookId, {
+        ok: false,
+        at: new Date(),
+        statusCode: failureStatusCode,
+        error: errorMessage,
+      }).catch(() => undefined);
+
       // Re-throw to trigger BullMQ retry
       throw error;
     }
@@ -164,29 +178,23 @@ export class WebhookProcessor extends WorkerHost {
 
   /**
    * Dead-letter handling. Without this hook, a job that exhausts its retries vanishes
-   * from the application's point of view: nothing is logged at the terminal failure, the
-   * webhook's `retryCount` column is never updated, and there is no way to tell a
-   * healthy endpoint from one that has been failing for hours.
+   * from the application's point of view: nothing is logged at the terminal failure, and
+   * there is no way to tell a healthy endpoint from one that has been failing for hours.
    *
    * `removeOnFail` in the queue config keeps the last 5000 failures for inspection, so
-   * this hook is the signal, not the storage.
+   * this hook is the signal, not the storage. Failure telemetry (lastError,
+   * lastFailureAt, lastStatusCode, consecutiveFailures) is recorded by `process()` on
+   * every attempt; this hook only decides whether to announce a retry or a dead-letter,
+   * and never touches the user-configured `retryCount` (that column is the retry budget,
+   * not an attempt counter).
    */
   @OnWorkerEvent('failed')
-  async onJobFailed(job: Job<WebhookJobData> | undefined, error: Error): Promise<void> {
+  onJobFailed(job: Job<WebhookJobData> | undefined, error: Error): void {
     if (!job) return;
 
     const { webhookId, event, maxRetries } = job.data;
     const attemptsMade = job.attemptsMade;
     const isExhausted = attemptsMade >= maxRetries;
-
-    // Record the real attempt count so operators can see failure history per endpoint.
-    await this.webhookRepository.update(webhookId, { retryCount: attemptsMade }).catch((updateError: unknown) => {
-      this.logger.warn('Failed to record webhook retry count', {
-        webhookId,
-        action: 'webhook_retry_count_failed',
-        error: updateError instanceof Error ? updateError.message : String(updateError),
-      });
-    });
 
     if (!isExhausted) {
       this.logger.warn('Webhook delivery failed, retry scheduled', {

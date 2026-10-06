@@ -44,6 +44,24 @@ export class Webhook {
   @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
   lastTriggeredAt: Date | null;
 
+  @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
+  lastSuccessAt: Date | null;
+
+  @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
+  lastFailureAt: Date | null;
+
+  @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
+  lastAttemptAt: Date | null;
+
+  @Column({ type: 'int', nullable: true })
+  lastStatusCode: number | null;
+
+  @Column({ type: 'text', nullable: true })
+  lastError: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  consecutiveFailures: number;
+
   @CreateDateColumn()
   createdAt: Date;
 
