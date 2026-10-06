@@ -136,6 +136,119 @@ describe('MessageService', () => {
     });
   });
 
+  // ── scheduled sends (sendAt) ───────────────────────────────────────
+
+  describe('scheduled send (sendAt)', () => {
+    const futureIso = new Date(Date.now() + 3_600_000).toISOString();
+
+    it('should persist a scheduled message and skip the engine when sendAt is in the future', async () => {
+      const result = await service.sendText('sess-1', {
+        chatId: '628123456789@c.us',
+        text: 'Reminder',
+        sendAt: futureIso,
+      });
+
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+
+      expect(repository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'sess-1',
+          body: 'Reminder',
+          type: 'text',
+          status: MessageStatus.SCHEDULED,
+        }),
+      );
+
+      // The scheduled message is saved once, not twice (no status flip on the way in).
+      expect(repository.save).toHaveBeenCalledTimes(1);
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:scheduled',
+        expect.objectContaining({ sendAt: new Date(futureIso).toISOString() }),
+        expect.any(Object),
+      );
+
+      expect(result.messageId).toBe('msg-uuid-1');
+      expect(result.timestamp).toBe(new Date(futureIso).getTime());
+    });
+
+    it('should reject a sendAt in the past', async () => {
+      const pastIso = new Date(Date.now() - 3_600_000).toISOString();
+
+      await expect(
+        service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Late', sendAt: pastIso }),
+      ).rejects.toThrow('sendAt must be in the future');
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('should reject an unparseable sendAt', async () => {
+      await expect(
+        service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Hello', sendAt: 'not-a-date' }),
+      ).rejects.toThrow('sendAt must be a valid ISO-8601 timestamp');
+    });
+  });
+
+  // ── deliverMessage (background dispatcher path) ────────────────────
+
+  describe('deliverMessage', () => {
+    function stagedMessage(overrides: Partial<Message> = {}): Message {
+      return {
+        id: 'msg-uuid-1',
+        sessionId: 'sess-1',
+        waMessageId: null as unknown as string,
+        chatId: '628123456789@c.us',
+        from: '628123456789',
+        to: '628123456789@c.us',
+        body: 'Scheduled hello',
+        type: 'text',
+        direction: MessageDirection.OUTGOING,
+        timestamp: null as unknown as number,
+        sendAt: new Date(),
+        metadata: null as unknown as Record<string, unknown>,
+        status: MessageStatus.SENDING,
+        createdAt: new Date(),
+        ...overrides,
+      };
+    }
+
+    it('should send the staged message and update the row to sent', async () => {
+      const message = stagedMessage();
+      const result = await service.deliverMessage(message);
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'Scheduled hello');
+      expect(result.messageId).toBe('wa-msg-1');
+      expect(message.status).toBe(MessageStatus.SENT);
+      expect(message.waMessageId).toBe('wa-msg-1');
+      expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ status: MessageStatus.SENT }));
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:sent',
+        expect.objectContaining({ result: mockEngineResult }),
+        expect.any(Object),
+      );
+    });
+
+    it('should mark the row failed and rethrow when the engine throws', async () => {
+      mockEngine.sendTextMessage.mockRejectedValueOnce(new Error('session crashed'));
+
+      const message = stagedMessage();
+      await expect(service.deliverMessage(message)).rejects.toThrow('session crashed');
+
+      expect(message.status).toBe(MessageStatus.FAILED);
+      expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ status: MessageStatus.FAILED }));
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:failed',
+        expect.objectContaining({ error: 'session crashed' }),
+        expect.any(Object),
+      );
+    });
+
+    it('should throw when a plugin vetoes the staged send', async () => {
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({ continue: false, data: {} });
+
+      await expect(service.deliverMessage(stagedMessage())).rejects.toThrow('Message sending blocked by plugin');
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+  });
+
   // ── sendImage ─────────────────────────────────────────────────────
 
   describe('sendImage', () => {

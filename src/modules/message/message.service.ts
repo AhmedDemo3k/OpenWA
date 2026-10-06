@@ -23,6 +23,13 @@ export class MessageService {
   ) {}
 
   async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
+    // A future sendAt turns this into a scheduled send: persist the message now and leave
+    // delivery to the background dispatcher, so the HTTP call does not block on the engine.
+    const sendAt = this.parseSchedule(dto.sendAt);
+    if (sendAt) {
+      return this.scheduleText(sessionId, dto, sendAt);
+    }
+
     // Execute hook before sending - plugins can modify or block
     const { continue: shouldContinue, data: hookData } = await this.hookManager.execute(
       'message:sending',
@@ -80,6 +87,97 @@ export class MessageService {
 
       throw error;
     }
+  }
+
+  /**
+   * Deliver a message that was persisted earlier (scheduled flow) or was handed to us
+   * by the dispatcher. Runs the same hook/send/failure lifecycle as an immediate send,
+   * then persists the outcome on the row the caller already holds.
+   */
+  async deliverMessage(message: Message): Promise<MessageResponseDto> {
+    const input = { chatId: message.chatId, text: message.body ?? '' };
+
+    // Plugins get the same veto power they have on immediate sends.
+    const { continue: shouldContinue } = await this.hookManager.execute(
+      'message:sending',
+      { sessionId: message.sessionId, input, type: 'text' },
+      { sessionId: message.sessionId, source: 'ScheduledMessageDispatcher' },
+    );
+
+    if (!shouldContinue) {
+      throw new BadRequestException('Message sending blocked by plugin');
+    }
+
+    const engine = this.getEngine(message.sessionId);
+
+    try {
+      const result = await engine.sendTextMessage(message.chatId, message.body ?? '');
+
+      message.waMessageId = result.id;
+      message.status = MessageStatus.SENT;
+      message.timestamp = result.timestamp;
+      await this.messageRepository.save(message);
+
+      await this.hookManager.execute(
+        'message:sent',
+        { sessionId: message.sessionId, result, input },
+        { sessionId: message.sessionId, source: 'ScheduledMessageDispatcher' },
+      );
+
+      return {
+        messageId: result.id,
+        timestamp: result.timestamp,
+      };
+    } catch (error) {
+      message.status = MessageStatus.FAILED;
+      await this.messageRepository.save(message);
+
+      await this.hookManager.execute(
+        'message:failed',
+        {
+          sessionId: message.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+          input,
+        },
+        { sessionId: message.sessionId, source: 'ScheduledMessageDispatcher' },
+      );
+
+      throw error;
+    }
+  }
+
+  private parseSchedule(sendAt: string | undefined): Date | null {
+    if (!sendAt) return null;
+
+    const parsed = new Date(sendAt);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException('sendAt must be a valid ISO-8601 timestamp');
+    }
+    if (parsed.getTime() <= Date.now()) {
+      throw new BadRequestException('sendAt must be in the future');
+    }
+    return parsed;
+  }
+
+  private async scheduleText(sessionId: string, dto: SendTextMessageDto, sendAt: Date): Promise<MessageResponseDto> {
+    const message = await this.saveOutgoingMessage(sessionId, {
+      chatId: dto.chatId,
+      body: dto.text,
+      type: 'text',
+      status: MessageStatus.SCHEDULED,
+      sendAt,
+    });
+
+    await this.hookManager.execute(
+      'message:scheduled',
+      { sessionId, sendAt: sendAt.toISOString(), input: dto },
+      { sessionId, source: 'MessageService' },
+    );
+
+    return {
+      messageId: message.id,
+      timestamp: sendAt.getTime(),
+    };
   }
 
   async sendImage(sessionId: string, dto: SendMediaMessageDto): Promise<MessageResponseDto> {
@@ -426,6 +524,7 @@ export class MessageService {
       type: string;
       timestamp?: number;
       status?: MessageStatus;
+      sendAt?: Date;
     },
   ): Promise<Message> {
     const session = await this.sessionService.findOne(sessionId);
@@ -439,6 +538,7 @@ export class MessageService {
       type: data.type,
       direction: MessageDirection.OUTGOING,
       timestamp: data.timestamp,
+      sendAt: data.sendAt ?? null,
       status: data.status ?? MessageStatus.PENDING,
     });
     return this.messageRepository.save(message);

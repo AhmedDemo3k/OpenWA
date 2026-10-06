@@ -1,7 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, MaxLength, IsUrl, ValidateIf } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, IsUrl, ValidateIf, IsISO8601 } from 'class-validator';
 
-export class SendTextMessageDto {
+export class ScheduledMessageBaseDto {
+  @ApiPropertyOptional({
+    description:
+      'ISO-8601 timestamp at which to send the message. When omitted the message is sent immediately; when present the message is persisted with status scheduled and delivered by the background dispatcher at that time.',
+    example: '2026-10-07T09:00:00.000Z',
+  })
+  @IsOptional()
+  @IsISO8601()
+  sendAt?: string;
+}
+
+export class SendTextMessageDto extends ScheduledMessageBaseDto {
   @ApiProperty({
     description: 'WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)',
     example: '628123456789@c.us',

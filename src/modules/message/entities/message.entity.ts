@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 'typeorm';
-import { jsonColumnType } from '../../../common/utils/column-types';
+import { jsonColumnType, dateColumnType } from '../../../common/utils/column-types';
+import { DateTransformer } from '../../../common/transformers/date.transformer';
 
 export enum MessageDirection {
   INCOMING = 'incoming',
@@ -8,6 +9,8 @@ export enum MessageDirection {
 
 export enum MessageStatus {
   PENDING = 'pending',
+  SCHEDULED = 'scheduled',
+  SENDING = 'sending',
   SENT = 'sent',
   DELIVERED = 'delivered',
   READ = 'read',
@@ -17,6 +20,7 @@ export enum MessageStatus {
 @Entity('messages')
 @Index(['sessionId', 'createdAt'])
 @Index(['chatId'])
+@Index(['status', 'sendAt'])
 export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -51,6 +55,9 @@ export class Message {
 
   @Column({ type: 'bigint', nullable: true })
   timestamp: number;
+
+  @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
+  sendAt: Date | null;
 
   @Column({ type: jsonColumnType(), nullable: true })
   metadata: Record<string, unknown>;
