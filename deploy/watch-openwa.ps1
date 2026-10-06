@@ -14,9 +14,52 @@ All state lives under the repository's data/ directory, which is gitignored. The
 copy of this script ran out of %TEMP%\opencode\openwa-smoke, which meant the SQLite
 databases, the media store, the logs, and this script itself could all be destroyed by a
 disk cleanup or a reboot. Nothing here may point at %TEMP%.
+
+Three things this watches, because each has taken the instance down without the process
+exiting:
+
+  * readiness      - the API stops answering while node is still alive
+  * resource usage - Chromium leaks and node never gives the memory back
+  * orphans        - Chromium outlives the node that launched it
+
+The orphan and resource checks are both on by default and both self-disable through
+parameters, because a supervisor that kills a healthy instance is worse than no
+supervisor at all.
 #>
 
+[CmdletBinding()]
+param(
+  # Restart the API once node's working set stays above this for $ResourceStrikes ticks.
+  # 3 GB is roughly three times a healthy idle figure for one WhatsApp session, so it is
+  # high enough to leave headroom and low enough to catch a real leak.
+  [int] $MaxNodeRamMB = 3072,
+
+  # Same, for sustained CPU. Measured against all logical cores, so a fully pegged single
+  # core reads as 100/n rather than 100.
+  [double] $MaxNodeCpuPercent = 85,
+
+  # Consecutive over-threshold ticks before acting. One spike is noise; this many in a row
+  # is a process that is not coming back on its own.
+  [int] $ResourceStrikes = 5,
+
+  # An orphaned Chromium is left alone this long before it is reaped. On a restart the
+  # previous browser is still tearing down, and killing it immediately would race the
+  # profile directory it is closing.
+  [int] $ReapAfterSeconds = 120,
+
+  # How often to look for orphans. A full Win32_Process query per tick is more expensive
+  # than the readiness probe it shares a loop with.
+  [int] $ReapEveryTicks = 6,
+
+  [switch] $DisableResourceGuard,
+  [switch] $DisableOrphanReaper
+)
+
 $ErrorActionPreference = 'Stop'
+
+# The decisions live in a module so they can be tested: the supervisor below is an infinite
+# loop that launches processes, so dot-sourcing it to reach a function would start an instance.
+Import-Module (Join-Path $PSScriptRoot 'watchdog-lib.psm1') -Force -DisableNameChecking
 
 $Root     = 'C:\Users\homek\Downloads\OpenWA'
 $DataDir  = Join-Path $Root 'data'
@@ -73,14 +116,12 @@ $env:PUPPETEER_HEADLESS      = 'true'
 # did `Get-Process chrome | Stop-Process`, which killed every Chrome window on the machine
 # on each restart -- including a personal browsing session, with no warning and no unsaved
 # form data preserved. Chromium instances started by whatsapp-web.js always carry the
-# session profile directory we control, so that is what we match on instead.
+# session profile directory we control, so that is what we match on instead, via the same
+# tested predicate the reaper uses. One matcher, so the two paths cannot drift apart.
 function Stop-OpenWaChromium {
   $procs = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue
   foreach ($p in $procs) {
-    $cmd = $p.CommandLine
-    if (-not $cmd) { continue }
-    if ($cmd -match [regex]::Escape('user-data-dir') -and
-        $cmd.IndexOf($Sessions, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+    if (Test-IsOpenWaChromiumCommandLine -CommandLine $p.CommandLine -SessionsRoot $Sessions) {
       Write-WatchLog "stopping OpenWA chromium PID $($p.ProcessId)"
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
@@ -94,6 +135,83 @@ function Stop-StrayServer {
     Stop-Process -Id $l.OwningProcess -Force -ErrorAction SilentlyContinue
   }
   Stop-OpenWaChromium
+}
+
+# ── Orphan reaper ─────────────────────────────────────────────────────────────
+#
+# Chromium outlives node more often than it should. whatsapp-web.js launches the browser as
+# a child, and the browser spawns renderers, zygotes and a GPU process beneath it. Kill node
+# and those grandchildren are re-parented, not terminated: the API port frees up, the
+# watchdog declares victory, and the leftover browser keeps its own profile lock and its own
+# slice of RAM indefinitely. Nothing reports it, because from Windows' point of view nothing
+# is wrong.
+#
+# So the reaper asks a narrower question than "is there a stale browser": is any Chromium
+# that owns one of our profile directories *no longer* a descendant of the node we are
+# currently supervising? That distinction is what keeps this from killing a healthy browser,
+# and it is why this cannot be replaced by matching on age alone.
+#
+# PIDs are reused, so ancestry is only followed while each link's creation time is later than
+# its child's. Without that check a recycled PID can make an orphan look like a descendant.
+
+function Invoke-OrphanReaper([int] $NodePid) {
+  if ($DisableOrphanReaper) { return }
+
+  # Two passes. Killing a browser process re-parents its renderers a moment or two later, so
+  # the first pass can complete before that settles and miss them; the second re-queries so
+  # the parent links are fresh.
+  #
+  # Both passes are scoped to processes that are NOT descendants of the node being
+  # supervised. An earlier draft called the blanket Stop-OpenWaChromium sweep here, which
+  # would have killed the live session's own browser every time a stale one was collected --
+  # precisely the outcome the ancestry check exists to prevent.
+  $total = 0
+
+  for ($pass = 1; $pass -le 2; $pass++) {
+    # One unfiltered query, then every ancestry answer is an in-memory lookup. Following the
+    # chain with a filtered query per hop cost ~4 WMI round trips per Chromium process, which
+    # on this box is enough latency to show up in the watchdog's own timing.
+    $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $scan = Get-OrphanedChromium -NodePid $NodePid -SessionsRoot $Sessions `
+      -ReapAfterSeconds $ReapAfterSeconds -Processes $procs
+
+    if ($scan.Owned -gt 0) {
+      Write-WatchLog "reaper pass ${pass}: $($scan.Owned) OpenWA chromium process(es), $($scan.Orphans.Count) orphaned"
+    }
+
+    if ($scan.Orphans.Count -eq 0) { break }
+
+    foreach ($o in $scan.Orphans) {
+      Write-WatchLog "reaping orphaned chromium PID $($o.ProcessId) ($($o.AgeSeconds)s old, not under node PID $NodePid)"
+      Stop-Process -Id $o.ProcessId -Force -ErrorAction SilentlyContinue
+      $total++
+    }
+
+    if ($pass -lt 2) { Start-Sleep -Milliseconds 750 }
+  }
+
+  if ($total -gt 0) { Write-WatchLog "reaped $total orphaned chromium process(es)" }
+}
+
+# ── Resource guard ───────────────────────────────────────────────────────────
+#
+# A wedged Chromium that never releases its profile leaves node holding memory it will not
+# give back, and the readiness probe keeps answering 200 the whole time. The process looks
+# healthy and is not. CPU is measured the same way for the same reason: a session that has
+# wedged will often spin rather than leak, and still pass every readiness check.
+
+function Read-NodeUsage($Proc) {
+  try { $Proc.Refresh() } catch { return $null }
+  if ($Proc.HasExited) { return $null }
+  return [pscustomobject]@{
+    RamMB     = [Math]::Round($Proc.WorkingSet64 / 1MB, 1)
+    CpuTotal  = $Proc.TotalProcessorTime.TotalSeconds
+    CpuSample = Get-Date
+  }
+}
+
+function Get-CpuPercent([double] $CpuDeltaSeconds, [double] $WallSeconds) {
+  return Get-NormalizedCpuPercent -CpuDeltaSeconds $CpuDeltaSeconds -WallSeconds $WallSeconds
 }
 
 foreach ($d in @($RunDir, $LogDir, $Sessions, $env:STORAGE_LOCAL_PATH)) {
@@ -130,15 +248,24 @@ while ($true) {
   $healthy  = $false
   $elapsed  = 0
 
+  # Resource tracking state. Sampled from the *previous* tick rather than by sleeping here,
+  # so the guard costs nothing when it is not firing.
+  $strikeCount = 0
+  $usage      = Read-NodeUsage $proc
+  $tick       = 0
+
   # Supervise this child until it dies or stops answering.
   while ($true) {
     Start-Sleep -Seconds $ProbeWait
     $elapsed += $ProbeWait
+    $tick++
 
     if ($proc.HasExited) {
       Write-WatchLog "node exited with code $($proc.ExitCode)"
       break
     }
+
+    $unhealthyReason = $null
 
     try {
       $r = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 8
@@ -152,12 +279,54 @@ while ($true) {
           $Backoff = 10
           Write-WatchLog "healthy; backoff reset to ${Backoff}s"
         }
-        continue
+      } else {
+        $unhealthyReason = "probe returned HTTP $($r.StatusCode)"
       }
-      Write-WatchLog "probe returned HTTP $($r.StatusCode)"
     } catch {
-      Write-WatchLog "probe failed: $($_.Exception.Message)"
+      $unhealthyReason = "probe failed: $($_.Exception.Message)"
     }
+
+    # ── Orphan reaper ───────────────────────────────────────────────────────────
+    # Runs even while healthy, which is the point: an orphaned browser is invisible to
+    # every other check here.
+    if (($tick % $ReapEveryTicks) -eq 0) {
+      try {
+        Invoke-OrphanReaper $proc.Id
+      } catch {
+        Write-WatchLog "orphan reaper error: $($_.Exception.Message)"
+      }
+    }
+
+    # ── Resource guard ──────────────────────────────────────────────────────────
+    if (-not $DisableResourceGuard) {
+      $now = Read-NodeUsage $proc
+      if ($now -and $usage) {
+        $wall = ($now.CpuSample - $usage.CpuSample).TotalSeconds
+        $cpu  = Get-CpuPercent ($now.CpuTotal - $usage.CpuTotal) $wall
+
+        $previous = $strikeCount
+        $strikeCount = Update-ResourceStrike -CurrentStrikes $strikeCount `
+          -RamMB $now.RamMB -MaxRamMB $MaxNodeRamMB `
+          -CpuPercent $cpu -MaxCpuPercent $MaxNodeCpuPercent
+
+        if ($strikeCount -gt $previous) {
+          Write-WatchLog "resource pressure ($strikeCount/$ResourceStrikes): ram=$($now.RamMB)MB (max ${MaxNodeRamMB}MB) cpu=$cpu% (max ${MaxNodeCpuPercent}%)"
+        } elseif ($strikeCount -eq 0 -and $previous -gt 0) {
+          Write-WatchLog "resource pressure cleared: ram=$($now.RamMB)MB cpu=$cpu%"
+        }
+
+        if ($strikeCount -ge $ResourceStrikes) {
+          Write-WatchLog "resource guard tripped; restarting PID $($proc.Id)"
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          break
+        }
+      }
+      $usage = $now
+    }
+
+    if (-not $unhealthyReason) { continue }
+
+    Write-WatchLog $unhealthyReason
 
     if ($elapsed -lt $GraceSeconds) {
       # Still inside the startup window. Log it so a slow boot is visible rather than silent,
