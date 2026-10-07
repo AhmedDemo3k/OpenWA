@@ -18,15 +18,6 @@ export interface Session {
   updatedAt: string;
 }
 
-export interface SessionStats {
-  total: number;
-  active: number;
-  ready: number;
-  disconnected: number;
-  byStatus: Record<string, number>;
-  memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
-}
-
 export interface DashboardStats {
   sessions: {
     active: number;
@@ -202,7 +193,6 @@ export const sessionApi = {
   start: (id: string) => request<Session>(`/sessions/${id}/start`, { method: 'POST' }),
   stop: (id: string) => request<Session>(`/sessions/${id}/stop`, { method: 'POST' }),
   getQR: (id: string) => request<{ qrCode: string; status: string }>(`/sessions/${id}/qr`),
-  getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) => request<{ id: string; name: string }[]>(`/sessions/${id}/groups`),
 };
 

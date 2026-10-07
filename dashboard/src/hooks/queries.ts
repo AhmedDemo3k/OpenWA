@@ -14,7 +14,6 @@ import {
 
 export const queryKeys = {
   sessions: ['sessions'] as const,
-  sessionStats: ['sessions', 'stats'] as const,
   sessionGroups: (sessionId: string) => ['sessions', sessionId, 'groups'] as const,
   webhooks: ['webhooks'] as const,
   apiKeys: ['apiKeys'] as const,
@@ -37,14 +36,6 @@ export function useSessionsQuery() {
   });
 }
 
-export function useSessionStatsQuery() {
-  return useQuery({
-    queryKey: queryKeys.sessionStats,
-    queryFn: sessionApi.getStats,
-    staleTime: 30_000,
-  });
-}
-
 export function useSessionGroupsQuery(sessionId: string, enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.sessionGroups(sessionId),
@@ -60,7 +51,6 @@ export function useCreateSessionMutation() {
     mutationFn: (name: string) => sessionApi.create(name),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sessionStats });
     },
   });
 }
@@ -71,7 +61,6 @@ export function useDeleteSessionMutation() {
     mutationFn: (id: string) => sessionApi.delete(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sessionStats });
     },
   });
 }
