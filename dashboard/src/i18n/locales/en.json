@@ -89,7 +89,7 @@
       "activeSessions": "Active Sessions",
       "messagesToday": "Messages Today",
       "webhooksConfigured": "Webhooks Configured",
-      "apiCalls": "API Calls (24h)"
+      "apiCalls": "API Calls (Today)"
     },
     "sessionsOverview": "Sessions Overview",
     "showingSessions": "Showing {{shown}} of {{total}} sessions",
@@ -315,6 +315,19 @@
     "empty": {
       "title": "No logs found",
       "description": "Audit logs will appear here as actions are performed"
+    },
+    "mode": {
+      "history": "History",
+      "live": "Live"
+    },
+    "live": {
+      "connected": "Streaming live...",
+      "disconnected": "Live stream disconnected",
+      "clear": "Clear"
+    },
+    "liveEmpty": {
+      "title": "Waiting for events",
+      "description": "New audit events will appear here in real time"
     }
   },
   "messageTester": {

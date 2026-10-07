@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { CacheService } from '../../common/cache';
+import { ApiUsageService } from './api-usage.service';
 
 export interface OverviewStats {
   sessions: {
@@ -17,6 +18,7 @@ export interface OverviewStats {
     failed: number;
     today: { sent: number; received: number };
   };
+  apiCallsToday: number;
 }
 
 export interface TimeSeriesPoint {
@@ -47,6 +49,7 @@ export class StatsService {
     @InjectRepository(Message, 'data')
     private readonly messageRepo: Repository<Message>,
     private readonly cacheService: CacheService,
+    private readonly apiUsageService: ApiUsageService,
   ) {}
 
   async getOverview(): Promise<OverviewStats> {
@@ -96,6 +99,8 @@ export class StatsService {
       byStatus,
     });
 
+    const apiCallsToday = await this.apiUsageService.getTodayCount();
+
     return {
       sessions: {
         active,
@@ -108,6 +113,7 @@ export class StatsService {
         failed,
         today: { sent: todaySent, received: todayReceived },
       },
+      apiCallsToday,
     };
   }
 

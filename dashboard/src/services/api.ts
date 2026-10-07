@@ -27,6 +27,21 @@ export interface SessionStats {
   memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
 }
 
+export interface DashboardStats {
+  sessions: {
+    active: number;
+    total: number;
+    byStatus: Record<string, number>;
+  };
+  messages: {
+    sent: number;
+    received: number;
+    failed: number;
+    today: { sent: number; received: number };
+  };
+  apiCallsToday: number;
+}
+
 export interface Webhook {
   id: string;
   sessionId: string;
@@ -258,6 +273,14 @@ export const auditApi = {
     const queryStr = query.toString();
     return request<{ data: AuditLog[]; total: number }>(`/audit${queryStr ? `?${queryStr}` : ''}`);
   },
+};
+
+// =============================================================================
+// Statistics API
+// =============================================================================
+
+export const statsApi = {
+  getOverview: () => request<DashboardStats>('/stats/overview'),
 };
 
 // =============================================================================

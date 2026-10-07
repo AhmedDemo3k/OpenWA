@@ -1,10 +1,113 @@
-﻿import { useState, useEffect } from 'react';
-import { Settings2, Sparkles, FileCode, Download, Upload, Keyboard, Database, Loader2, Search, CheckSquare, Square } from 'lucide-react';
+﻿import { useState, useEffect, type Dispatch, type SetStateAction } from 'react';
+import { Settings2, Sparkles, FileCode, Download, Upload, Keyboard, Database, Loader2, Search, CheckSquare, Square, type LucideIcon } from 'lucide-react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../components/Toast';
 import './BotSettings.css';
 
-const tabs: { id: TabId; label: string; icon: any }[] = [
+type ToastApi = ReturnType<typeof useToast>;
+
+interface TabCommonProps {
+  t: TFunction;
+  toast: ToastApi;
+}
+
+interface ExtractStatus {
+  messagesExtracted?: number;
+  chatsWithData?: number;
+  pairsGenerated?: number;
+  error?: string;
+}
+
+interface ChatHistory {
+  exists?: boolean;
+  size: number;
+  lines: number;
+  preview?: string;
+}
+
+interface BotConfig {
+  gemini?: { hasKey?: boolean; model?: string };
+  openai?: { hasKey?: boolean; model?: string };
+  activeProvider?: string;
+  features?: Record<string, boolean>;
+}
+
+interface BotStats {
+  features?: Record<string, boolean>;
+  uptime?: string;
+  totalReplies?: number;
+  totalChats?: number;
+  model?: string;
+}
+
+interface ConfigPatchBody {
+  activeProvider?: string;
+  gemini?: { model?: string; apiKey?: string };
+  openai?: { model?: string; apiKey?: string };
+  features?: Record<string, boolean>;
+}
+
+interface ScrapeBody {
+  sessionId?: string;
+  chatIds?: string[];
+}
+
+interface ExtractTabProps extends TabCommonProps {
+  extractStatus: ExtractStatus | null;
+  setExtractStatus: Dispatch<SetStateAction<ExtractStatus | null>>;
+  uploadText: string;
+  setUploadText: Dispatch<SetStateAction<string>>;
+  chatHistory: ChatHistory | null;
+  setChatHistory: Dispatch<SetStateAction<ChatHistory | null>>;
+}
+
+interface StyleFingerprint {
+  formality?: string;
+  avgMessageWords?: number;
+  avgResponseLength?: number;
+  emojiUsage?: { usage?: string; avgPerMessage?: number };
+  languageMix?: { dominant?: string; arabicPercent?: number; englishPercent?: number };
+  messagesAnalyzed?: number;
+  totalConversations?: number;
+  punctuation?: { dominant?: string; period?: number; exclamation?: number; question?: number };
+  commonGreetings?: string[];
+  commonSignoffs?: string[];
+  topPhrases?: { phrase: string; count: number }[];
+  responseStyle?: string;
+}
+
+interface StyleData {
+  fingerprint?: StyleFingerprint;
+  hasData?: boolean;
+  systemPrompt?: string;
+  overrides?: { formality?: string; responseLength?: string; emojiUsage?: string; customInstructions?: string };
+}
+
+interface RuleItem {
+  id: string;
+  trigger: string;
+  response: string;
+  context?: string;
+  enabled?: boolean;
+}
+
+interface KeywordItem {
+  id: string;
+  keywords?: string[];
+  reply: string;
+  context?: string;
+  enabled?: boolean;
+}
+
+interface MemoryEntry {
+  chatId?: string;
+  id?: string;
+  memory?: string;
+  data?: string;
+}
+
+const tabs: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'general', label: 'botSettings.tabs.general', icon: Settings2 },
   { id: 'style', label: 'botSettings.tabs.style', icon: Sparkles },
   { id: 'rules', label: 'botSettings.tabs.rules', icon: FileCode },
@@ -19,9 +122,9 @@ export default function BotSettings() {
   const { t } = useTranslation();
   const toast = useToast();
   const [activeTab, setActiveTab] = useState<TabId>('general');
-  const [extractStatus, setExtractStatus] = useState<any>(null);
+  const [extractStatus, setExtractStatus] = useState<ExtractStatus | null>(null);
   const [uploadText, setUploadText] = useState('');
-  const [chatHistory, setChatHistory] = useState<any>(null);
+  const [chatHistory, setChatHistory] = useState<ChatHistory | null>(null);
 
   useEffect(() => {
     fetch('/bot-api/api/chat-history').then(r => r.json()).then(setChatHistory).catch(() => {});
@@ -55,9 +158,9 @@ export default function BotSettings() {
 }
 
 // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ GENERAL TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
-function GeneralTab({ t, toast }: { t: any; toast: any }) {
-  const [stats, setStats] = useState<any>(null);
-  const [config, setConfig] = useState<any>(null);
+function GeneralTab({ t, toast }: TabCommonProps) {
+  const [stats, setStats] = useState<BotStats | null>(null);
+  const [config, setConfig] = useState<BotConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [geminiKey, setGeminiKey] = useState('');
   const [geminiModel, setGeminiModel] = useState('gemini-2.0-flash');
@@ -94,11 +197,11 @@ function GeneralTab({ t, toast }: { t: any; toast: any }) {
   const saveApiKeys = async () => {
     setSaving(true);
     try {
-      const body: any = { activeProvider };
+      const body: ConfigPatchBody = { activeProvider };
       body.gemini = { model: geminiModel };
-      if (geminiKey) body.gemini.apiKey = geminiKey;
+      if (geminiKey) body.gemini = { ...body.gemini, apiKey: geminiKey };
       body.openai = { model: openaiModel };
-      if (openaiKey) body.openai.apiKey = openaiKey;
+      if (openaiKey) body.openai = { ...body.openai, apiKey: openaiKey };
       await fetch('/bot-api/api/config', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -218,7 +321,7 @@ interface SessionInfo {
   port: number | null;
 }
 
-function ExtractTab({ extractStatus, setExtractStatus, uploadText, setUploadText, chatHistory, setChatHistory, t, toast }: any) {
+function ExtractTab({ extractStatus, setExtractStatus, uploadText, setUploadText, chatHistory, setChatHistory, t, toast }: ExtractTabProps) {
   const [scraping, setScraping] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -244,7 +347,7 @@ function ExtractTab({ extractStatus, setExtractStatus, uploadText, setUploadText
       const res = await fetch(`/bot-api/api/sessions/${sessionId}/chats`);
       const data = await res.json();
       if (Array.isArray(data)) setChats(data);
-    } catch {}
+    } catch { /* ignore network errors */ }
     setLoadingChats(false);
   };
 
@@ -272,7 +375,7 @@ function ExtractTab({ extractStatus, setExtractStatus, uploadText, setUploadText
   const handleScrape = async () => {
     setScraping(true);
     try {
-      const body: any = {};
+      const body: ScrapeBody = {};
       if (selectedSession) body.sessionId = selectedSession;
       if (selectedChatIds.size > 0) body.chatIds = Array.from(selectedChatIds);
 
@@ -439,8 +542,8 @@ function ExtractTab({ extractStatus, setExtractStatus, uploadText, setUploadText
 // hardcoded Arabic rather than routed through i18n.
 // `t` is accepted for symmetry with the other tabs; this one is hardcoded Arabic rather than
 // routed through i18n.
-function StyleTab({ extractStatus, toast }: any) {
-  const [data, setData] = useState<any>(null);
+function StyleTab({ extractStatus, toast }: TabCommonProps & { extractStatus: ExtractStatus | null }) {
+  const [data, setData] = useState<StyleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -488,7 +591,7 @@ function StyleTab({ extractStatus, toast }: any) {
   const saveOverrides = async () => {
     setSaving(true);
     try {
-      const overrides: any = {};
+      const overrides: NonNullable<StyleData['overrides']> = {};
       if (formality !== 'auto') overrides.formality = formality;
       if (responseLength !== 'auto') overrides.responseLength = responseLength;
       if (emojiUsage !== 'auto') overrides.emojiUsage = emojiUsage;
@@ -501,7 +604,7 @@ function StyleTab({ extractStatus, toast }: any) {
 
       if (res.success) {
         toast.success('طھظ… ط­ظپط¸ ط¥ط¹ط¯ط§ط¯ط§طھ ط§ظ„ط£ط³ظ„ظˆط¨ âœ“', '');
-        setData((prev: any) => ({ ...prev, overrides: res.overrides, systemPrompt: res.systemPrompt }));
+        setData(prev => ({ ...(prev ?? {}), overrides: res.overrides, systemPrompt: res.systemPrompt }));
         setDirty(false);
       } else {
         toast.error(res.error || 'ط­طµظ„ ط®ط·ط£ ظپظٹ ط§ظ„ط­ظپط¸', '');
@@ -667,7 +770,7 @@ function StyleTab({ extractStatus, toast }: any) {
             <h3 className="section-title">ط§ظ„طھط­ظٹط§طھ</h3>
             <div className="phrase-list">
               {(fp.commonGreetings || []).length > 0
-                ? fp.commonGreetings.map((g: string, i: number) => <span key={i} className="phrase-tag">{g}</span>)
+                ? (fp.commonGreetings || []).map((g: string, i: number) => <span key={i} className="phrase-tag">{g}</span>)
                 : <span className="empty-state-sm">â€”</span>}
             </div>
           </div>
@@ -676,7 +779,7 @@ function StyleTab({ extractStatus, toast }: any) {
             <h3 className="section-title">ط§ظ„ط®طھط§ظ…ظٹط§طھ</h3>
             <div className="phrase-list">
               {(fp.commonSignoffs || []).length > 0
-                ? fp.commonSignoffs.map((s: string, i: number) => <span key={i} className="phrase-tag">{s}</span>)
+                ? (fp.commonSignoffs || []).map((s: string, i: number) => <span key={i} className="phrase-tag">{s}</span>)
                 : <span className="empty-state-sm">â€”</span>}
             </div>
           </div>
@@ -685,7 +788,7 @@ function StyleTab({ extractStatus, toast }: any) {
             <h3 className="section-title">ط§ظ„ط¹ط¨ط§ط±ط§طھ ط§ظ„ظ…طھظƒط±ط±ط©</h3>
             <div className="phrase-list">
               {(fp.topPhrases || []).length > 0
-                ? fp.topPhrases.slice(0, 8).map((p: any, i: number) => (
+                ? (fp.topPhrases || []).slice(0, 8).map((p, i) => (
                     <span key={i} className="phrase-tag">{p.phrase} <small>{p.count}</small></span>
                   ))
                 : <span className="empty-state-sm">â€”</span>}
@@ -728,8 +831,8 @@ function StyleTab({ extractStatus, toast }: any) {
 
 // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ RULES TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
 // `t` is accepted for symmetry with the other tabs; this one is hardcoded Arabic.
-function RulesTab({ toast }: any) {
-  const [rules, setRules] = useState<any[]>([]);
+function RulesTab({ toast }: TabCommonProps) {
+  const [rules, setRules] = useState<RuleItem[]>([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -784,7 +887,7 @@ function RulesTab({ toast }: any) {
     } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
-  const startEdit = (rule: any) => {
+  const startEdit = (rule: RuleItem) => {
     setForm({ trigger: rule.trigger, response: rule.response, context: rule.context || '' });
     setEditId(rule.id);
     setShowForm(true);
@@ -886,8 +989,8 @@ function RulesTab({ toast }: any) {
 
 // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ KEYWORDS TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
 // `t` is accepted for symmetry with the other tabs; this one is hardcoded Arabic.
-function KeywordsTab({ toast }: any) {
-  const [items, setItems] = useState<any[]>([]);
+function KeywordsTab({ toast }: TabCommonProps) {
+  const [items, setItems] = useState<KeywordItem[]>([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -962,7 +1065,7 @@ function KeywordsTab({ toast }: any) {
     } catch { toast.error('ط­طµظ„ ط®ط·ط£', ''); }
   };
 
-  const startEdit = (item: any) => {
+  const startEdit = (item: KeywordItem) => {
     setForm({ keywords: [...(item.keywords || [])], reply: item.reply, context: item.context || '' });
     setEditId(item.id);
     setShowForm(true);
@@ -1078,8 +1181,8 @@ function KeywordsTab({ toast }: any) {
 }
 
 // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ MEMORY TAB â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
-function MemoryTab({ t, toast }: any) {
-  const [memories, setMemories] = useState<any[]>([]);
+function MemoryTab({ t, toast }: TabCommonProps) {
+  const [memories, setMemories] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -1116,7 +1219,7 @@ function MemoryTab({ t, toast }: any) {
           <div key={m.chatId || m.id} className="memory-item">
             <div className="memory-chat">{m.chatId || m.id}</div>
             <div className="memory-data">{(m.memory || m.data || '').slice(0, 100)}</div>
-            <button className="btn-danger" onClick={() => clearMemory(m.chatId || m.id)}>âœ•</button>
+            <button className="btn-danger" onClick={() => clearMemory(m.chatId || m.id || '')}>âœ•</button>
           </div>
         ))}
       </div>

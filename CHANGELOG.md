@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **API usage counter**: `GET /api/stats/overview` now includes `apiCallsToday`. Requests are
+  counted per local calendar day in a new `api_usage` table on the data connection, incremented by a
+  global interceptor and flushed to SQLite/Postgres every 60 seconds (Postgres has a dedicated
+  migration; SQLite auto-creates the table via synchronize).
+- **Audit log live stream**: new `GET /api/audit/stream` over Server-Sent Events pushes newly created
+  audit logs as they are persisted, with a 15s heartbeat to survive proxy idle timeouts. Consumed via
+  `fetch()` so the `X-API-Key` header can be sent (EventSource cannot set headers).
+- **Dashboard live logs**: the Logs page now has a Live mode backed by the audit SSE stream (dedup,
+  200-entry cap, clear button, connected/disconnected indicator) alongside the existing filtered,
+  paginated history view.
+- **Dashboard stats tiles**: active sessions, messages sent/received today, and API calls today are
+  now backed by the real `/api/stats/overview` endpoint instead of placeholder numbers.
+
+### Changed
+
+- **Dashboard label**: the API calls stat is now labelled "API Calls (Today)" (English and Arabic)
+  since the counter measures the current calendar day.
+- **BotSettings type safety**: replaced 22 `any` usages with typed interfaces (`LucideIcon`, `TFunction`,
+  `Dispatch`/`SetStateAction`, and per-tab DTO shapes) and repaired an empty `catch` block; the
+  dashboard lint now passes with zero errors.
+
 ## [0.1.6] - 2026-05-17
 
 ### Fixed

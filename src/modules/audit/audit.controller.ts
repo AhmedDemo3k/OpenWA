@@ -1,5 +1,6 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Sse } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { Observable } from 'rxjs';
 import { AuditService, AuditQueryOptions } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 
@@ -37,5 +38,33 @@ export class AuditController {
     if (offset) options.offset = parseInt(offset, 10);
 
     return this.auditService.findAll(options);
+  }
+
+  /**
+   * Server-Sent Events stream of newly created audit logs.
+   *
+   * The client is expected to drive this with fetch() so it can send the X-API-Key header
+   * (EventSource cannot set headers). A heartbeat frame keeps the connection open through
+   * proxies with idle timeouts; clients should ignore empty `data` frames.
+   */
+  @Sse('stream')
+  @ApiOperation({ summary: 'Stream new audit logs over Server-Sent Events' })
+  @ApiResponse({ status: 200, description: 'Server-Sent Events stream of audit logs' })
+  streamLogs(): Observable<{ data: AuditLog | '' }> {
+    return new Observable<{ data: AuditLog | '' }>(subscriber => {
+      const unsubscribe = this.auditService.onLog(log => {
+        subscriber.next({ data: log });
+      });
+
+      const heartbeat = setInterval(() => {
+        subscriber.next({ data: '' });
+      }, 15_000);
+      heartbeat.unref?.();
+
+      return () => {
+        unsubscribe();
+        clearInterval(heartbeat);
+      };
+    });
   }
 }

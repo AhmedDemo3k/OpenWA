@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThan } from 'typeorm';
+import { EventEmitter } from 'events';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 import { ApiKey } from '../auth/entities/api-key.entity';
 
@@ -30,10 +31,19 @@ export interface AuditQueryOptions {
 
 @Injectable()
 export class AuditService {
+  /**
+   * Fan-out for newly created audit logs. The SSE endpoint subscribes here so live clients
+   * get entries as soon as they are persisted, without polling the table.
+   */
+  private readonly events = new EventEmitter();
+
   constructor(
     @InjectRepository(AuditLog, 'main')
     private readonly auditRepository: Repository<AuditLog>,
-  ) {}
+  ) {
+    // The default of 10 listeners would cap the number of concurrent live-log viewers.
+    this.events.setMaxListeners(100);
+  }
 
   async log(
     action: AuditAction,
@@ -56,7 +66,23 @@ export class AuditService {
       errorMessage: context.errorMessage || null,
     });
 
-    return this.auditRepository.save(auditLog);
+    const saved = await this.auditRepository.save(auditLog);
+    this.publish(saved);
+    return saved;
+  }
+
+  /**
+   * Subscribes to newly created audit logs. Returns an unsubscribe function.
+   */
+  onLog(handler: (log: AuditLog) => void): () => void {
+    this.events.on('audit:created', handler);
+    return () => {
+      this.events.off('audit:created', handler);
+    };
+  }
+
+  private publish(log: AuditLog): void {
+    this.events.emit('audit:created', log);
   }
 
   async logInfo(action: AuditAction, context: AuditContext = {}): Promise<AuditLog> {

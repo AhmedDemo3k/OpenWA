@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { MessageSquare, Send, Webhook, Activity, ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useSessionsQuery, useSessionStatsQuery, useWebhooksQuery, useStopSessionMutation } from '../hooks/queries';
+import { useSessionsQuery, useDashboardStatsQuery, useWebhooksQuery, useStopSessionMutation } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import './Dashboard.css';
 
@@ -11,7 +11,7 @@ export function Dashboard() {
   useDocumentTitle(t('dashboard.title'));
   const navigate = useNavigate();
   const { data: sessions = [], isLoading: loadingSessions, error: sessionsError } = useSessionsQuery();
-  const { data: stats } = useSessionStatsQuery();
+  const { data: stats } = useDashboardStatsQuery();
   const { data: webhooks = [] } = useWebhooksQuery();
   const stopMutation = useStopSessionMutation();
   const loading = loadingSessions;
@@ -30,17 +30,37 @@ export function Dashboard() {
     }
   };
 
+  const activeSessions = stats?.sessions.active ?? 0;
+  const readyCount = stats?.sessions.byStatus?.ready ?? 0;
+  const messagesToday = stats
+    ? stats.messages.today.sent + stats.messages.today.received
+    : 0;
+  const sentToday = stats?.messages.today.sent ?? 0;
+  const apiCallsToday = stats?.apiCallsToday ?? 0;
+
   const statsCards = [
     {
       label: t('dashboard.stats.activeSessions'),
-      value: stats?.active ?? 0,
+      value: activeSessions,
       icon: MessageSquare,
-      trend: `+${stats?.ready ?? 0}`,
+      trend: `+${readyCount}`,
       trendUp: true,
     },
-    { label: t('dashboard.stats.messagesToday'), value: '—', icon: Send, trend: '0', trendUp: null },
+    {
+      label: t('dashboard.stats.messagesToday'),
+      value: messagesToday,
+      icon: Send,
+      trend: stats ? `+${sentToday}` : '0',
+      trendUp: typeof stats !== 'undefined' && sentToday > 0,
+    },
     { label: t('dashboard.stats.webhooksConfigured'), value: webhookCount, icon: Webhook, trend: '0', trendUp: null },
-    { label: t('dashboard.stats.apiCalls'), value: '—', icon: Activity, trend: '0', trendUp: null },
+    {
+      label: t('dashboard.stats.apiCalls'),
+      value: apiCallsToday,
+      icon: Activity,
+      trend: stats ? `+${apiCallsToday}` : '0',
+      trendUp: typeof stats !== 'undefined' && apiCallsToday > 0,
+    },
   ];
 
   const formatLastActive = (date?: string) => {
@@ -81,8 +101,8 @@ export function Dashboard() {
         title={t('dashboard.title')}
         subtitle={t('dashboard.subtitle')}
         badge={
-          <span className={`status-badge ${stats && stats.ready > 0 ? 'connected' : 'disconnected'}`}>
-            {stats && stats.ready > 0 ? t('common.connected') : t('common.disconnected')}
+          <span className={`status-badge ${readyCount > 0 ? 'connected' : 'disconnected'}`}>
+            {readyCount > 0 ? t('common.connected') : t('common.disconnected')}
           </span>
         }
       />
@@ -110,7 +130,7 @@ export function Dashboard() {
         <div className="section-header">
           <h2>{t('dashboard.sessionsOverview')}</h2>
           <span className="section-subtitle">
-            {t('dashboard.showingSessions', { shown: sessions.length, total: stats?.total ?? 0 })}
+            {t('dashboard.showingSessions', { shown: sessions.length, total: stats?.sessions.total ?? 0 })}
           </span>
         </div>
 

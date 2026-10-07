@@ -6,6 +6,7 @@ import {
   auditApi,
   infraApi,
   pluginsApi,
+  statsApi,
   type Webhook,
 } from '../services/api';
 
@@ -19,6 +20,7 @@ export const queryKeys = {
   apiKeys: ['apiKeys'] as const,
   logs: (params: { severity?: string; page: number; limit: number }) =>
     ['logs', params] as const,
+  statsOverview: ['stats', 'overview'] as const,
   infraStatus: ['infra', 'status'] as const,
   plugins: ['plugins'] as const,
   engines: ['engines'] as const,
@@ -190,6 +192,17 @@ export function useLogsQuery(params: { severity?: string; page: number; limit: n
         offset: (params.page - 1) * params.limit,
       }),
     staleTime: 15_000,
+  });
+}
+
+// ── Dashboard Statistics ──────────────────────────────────────────────
+
+export function useDashboardStatsQuery() {
+  return useQuery({
+    queryKey: queryKeys.statsOverview,
+    queryFn: statsApi.getOverview,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 }
 

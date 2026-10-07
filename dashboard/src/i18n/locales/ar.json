@@ -89,7 +89,7 @@
       "activeSessions": "الجلسات النشطة",
       "messagesToday": "رسائل اليوم",
       "webhooksConfigured": "Webhooks مُعدة",
-      "apiCalls": "استدعاءات API (24 ساعة)"
+      "apiCalls": "استدعاءات API (اليوم)"
     },
     "sessionsOverview": "نظرة عامة على الجلسات",
     "showingSessions": "عرض {{shown}} من {{total}} جلسة",
@@ -315,6 +315,19 @@
     "empty": {
       "title": "لا توجد سجلات",
       "description": "ستظهر سجلات المراجعة هنا عند تنفيذ الإجراءات"
+    },
+    "mode": {
+      "history": "السجل",
+      "live": "مباشر"
+    },
+    "live": {
+      "connected": "بث مباشر...",
+      "disconnected": "انقطع البث المباشر",
+      "clear": "مسح"
+    },
+    "liveEmpty": {
+      "title": "بانتظار الأحداث",
+      "description": "ستظهر أحداث المراجعة الجديدة هنا في الوقت الفعلي"
     }
   },
   "messageTester": {
