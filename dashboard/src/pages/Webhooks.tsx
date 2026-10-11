@@ -11,8 +11,13 @@ import {
   Webhook as WebhookIcon,
   Check,
   AlertTriangle,
+  History,
+  Pause,
+  Play as ResumeIcon,
+  RefreshCw,
+  Ban,
 } from 'lucide-react';
-import { webhookApi, type Webhook } from '../services/api';
+import { webhookApi, type Webhook, type WebhookDeliveryLog, type WebhookDeadLetter } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import {
@@ -28,9 +33,19 @@ import './Webhooks.css';
 const availableEventNames = [
   'message.received',
   'message.sent',
-  'session.connected',
-  'session.disconnected',
+  'message.ack',
+  'message.delivered',
+  'message.read',
+  'message.revoked',
+  'session.created',
+  'session.deleted',
+  'session.status',
   'session.qr',
+  'session.authenticated',
+  'session.disconnected',
+  'group.join',
+  'group.leave',
+  'group.update',
   '*',
 ] as const;
 
@@ -52,6 +67,13 @@ export function Webhooks() {
   const [newWebhook, setNewWebhook] = useState({ url: '', events: ['message.received'], sessionId: '' });
   const [testingId, setTestingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const [logsTarget, setLogsTarget] = useState<Webhook | null>(null);
+  const [deliveries, setDeliveries] = useState<WebhookDeliveryLog[]>([]);
+  const [deadLetters, setDeadLetters] = useState<WebhookDeadLetter[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [busyJobId, setBusyJobId] = useState<string | null>(null);
+  const [busyBulk, setBusyBulk] = useState<'retry' | 'remove' | null>(null);
 
   const eventDescription = (name: string) => {
     if (name === '*') return t('webhooks.eventDescriptions.all');
@@ -173,6 +195,121 @@ export function Webhooks() {
       ...prev,
       events: prev.events.includes(event) ? prev.events.filter(e => e !== event) : [...prev.events, event],
     }));
+  };
+
+  const openLogs = async (webhook: Webhook) => {
+    setLogsTarget(webhook);
+    setDeliveries([]);
+    setDeadLetters([]);
+    setLoadingLogs(true);
+    try {
+      const [deliveriesRes, deadRes] = await Promise.all([
+        webhookApi.deliver(webhook.sessionId, webhook.id, 50),
+        webhookApi.listDeadLetters(webhook.sessionId, webhook.id, 50),
+      ]);
+      setDeliveries(deliveriesRes);
+      setDeadLetters(deadRes);
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: t('webhooks.toasts.logsFailed', {
+          message: err instanceof Error ? err.message : t('common.unknownError'),
+        }),
+      });
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
+  const handleRetryJob = async (jobId: string) => {
+    if (!logsTarget) return;
+    setBusyJobId(jobId);
+    try {
+      await webhookApi.retryDeadLetter(logsTarget.sessionId, logsTarget.id, jobId);
+      setDeadLetters(prev => prev.filter(d => d.jobId !== jobId));
+      setToast({ type: 'success', message: t('webhooks.toasts.retried') });
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : t('common.unknownError'),
+      });
+    } finally {
+      setBusyJobId(null);
+    }
+  };
+
+  const handleRemoveJob = async (jobId: string) => {
+    if (!logsTarget) return;
+    setBusyJobId(jobId);
+    try {
+      await webhookApi.removeDeadLetter(logsTarget.sessionId, logsTarget.id, jobId);
+      setDeadLetters(prev => prev.filter(d => d.jobId !== jobId));
+      setToast({ type: 'success', message: t('webhooks.toasts.removed') });
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : t('common.unknownError'),
+      });
+    } finally {
+      setBusyJobId(null);
+    }
+  };
+
+  const handleRetryAll = async () => {
+    if (!logsTarget) return;
+    setBusyBulk('retry');
+    try {
+      const res = await webhookApi.retryAllDeadLetters(logsTarget.sessionId, logsTarget.id);
+      const loaded = await webhookApi.listDeadLetters(logsTarget.sessionId, logsTarget.id, 50);
+      setDeadLetters(loaded);
+      setToast({
+        type: 'success',
+        message: t('webhooks.toasts.retriedAll', { retried: res.retried }),
+      });
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : t('common.unknownError'),
+      });
+    } finally {
+      setBusyBulk(null);
+    }
+  };
+
+  const handleRemoveAll = async () => {
+    if (!logsTarget) return;
+    setBusyBulk('remove');
+    try {
+      await webhookApi.removeAllDeadLetters(logsTarget.sessionId, logsTarget.id);
+      setDeadLetters([]);
+      setToast({ type: 'success', message: t('webhooks.toasts.removedAll') });
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : t('common.unknownError'),
+      });
+    } finally {
+      setBusyBulk(null);
+    }
+  };
+
+  const togglePause = async (webhook: Webhook) => {
+    try {
+      await updateMutation.mutateAsync({
+        sessionId: webhook.sessionId,
+        id: webhook.id,
+        data: { paused: !webhook.paused },
+      });
+      setToast({
+        type: 'success',
+        message: t(webhook.paused ? 'webhooks.toasts.resumed' : 'webhooks.toasts.paused'),
+      });
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : t('common.unknownError'),
+      });
+    }
   };
 
   if (loading) {
@@ -392,10 +529,28 @@ export function Webhooks() {
                   <span>
                     {sessions.find(s => s.id === webhook.sessionId)?.name || webhook.sessionId.substring(0, 8)}
                   </span>
-                  <span>
-                    <span className={`status-badge ${webhook.active ? 'active' : 'inactive'}`}>
-                      {webhook.active ? t('common.active') : t('common.inactive')}
-                    </span>
+                  <span className="status-cell">
+                    {webhook.paused ? (
+                      <span className="status-badge paused" title={webhook.pauseReason || ''}>
+                        <Pause size={12} />
+                        {t('webhooks.status.paused')}
+                      </span>
+                    ) : (
+                      <span className={`status-badge ${webhook.active ? 'active' : 'inactive'}`}>
+                        {webhook.active ? t('common.active') : t('common.inactive')}
+                      </span>
+                    )}
+                    {webhook.lastStatusCode != null && (
+                      <span
+                        className={`health-dot ${webhook.lastStatusCode >= 200 && webhook.lastStatusCode < 300 ? 'ok' : 'fail'}`}
+                        title={`${webhook.lastStatusCode}${webhook.lastError ? ` — ${webhook.lastError}` : ''}`}
+                      />
+                    )}
+                    {(webhook.consecutiveFailures ?? 0) > 0 && (
+                      <span className="fail-count" title={`${webhook.consecutiveFailures} ${t('webhooks.status.failures')}`}>
+                        {webhook.consecutiveFailures}×
+                      </span>
+                    )}
                   </span>
                   <span className="actions-cell">
                     <button
@@ -406,8 +561,24 @@ export function Webhooks() {
                     >
                       {testingId === webhook.id ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                     </button>
+                    <button
+                      className="icon-btn"
+                      title={t('webhooks.actions.logs')}
+                      onClick={() => void openLogs(webhook)}
+                    >
+                      <History size={16} />
+                    </button>
                     {canWrite && (
                       <>
+                        {webhook.paused && (
+                          <button
+                            className="icon-btn"
+                            title={t('webhooks.actions.resume')}
+                            onClick={() => void togglePause(webhook)}
+                          >
+                            <ResumeIcon size={16} />
+                          </button>
+                        )}
                         <button className="icon-btn" title={t('webhooks.actions.edit')} onClick={() => openEdit(webhook)}>
                           <Edit size={16} />
                         </button>
@@ -439,6 +610,138 @@ export function Webhooks() {
           </div>
         </div>
       </div>
+
+      {logsTarget && (
+        <div className="modal-overlay" onClick={() => setLogsTarget(null)}>
+          <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>
+                {t('webhooks.deliveriesTitle')}
+                <code className="deliveries-url">{logsTarget.url}</code>
+              </h2>
+              <button className="btn-icon" onClick={() => setLogsTarget(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              {loadingLogs ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+                  <Loader2 size={28} className="animate-spin" />
+                </div>
+              ) : (
+                <>
+                  <div className="deliveries-section-header">
+                    <h3>{t('webhooks.deliveries.recent')}</h3>
+                  </div>
+                  {deliveries.length === 0 ? (
+                    <p className="deliveries-empty">{t('webhooks.deliveries.empty')}</p>
+                  ) : (
+                    <div className="deliveries-table">
+                      <div className="table-row header">
+                        <span>{t('webhooks.columns.result')}</span>
+                        <span>{t('webhooks.columns.status')}</span>
+                        <span>{t('webhooks.columns.event')}</span>
+                        <span>{t('webhooks.columns.duration')}</span>
+                        <span>{t('webhooks.columns.attempt')}</span>
+                        <span>{t('webhooks.columns.time')}</span>
+                      </div>
+                      {deliveries.map(d => (
+                        <div key={d.id} className="table-row">
+                          <span className={`status-badge ${d.success ? 'active' : 'failed'}`}>
+                            {d.success ? t('common.success') : t('common.failed')}
+                          </span>
+                          <span>{d.statusCode ?? '—'}</span>
+                          <span>
+                            <code className="delivery-event">{d.event}</code>
+                          </span>
+                          <span>{d.responseTimeMs != null ? `${d.responseTimeMs}ms` : '—'}</span>
+                          <span>{d.attempt ?? '—'}</span>
+                          <span>{d.createdAt ? new Date(d.createdAt).toLocaleString() : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="deliveries-section-header">
+                    <h3>{t('webhooks.deliveries.deadLetters')}</h3>
+                    {deadLetters.length > 0 && canWrite && (
+                      <span className="deliveries-bulk-actions">
+                        <button
+                          className="btn-secondary btn-sm"
+                          disabled={busyBulk === 'retry'}
+                          onClick={() => void handleRetryAll()}
+                        >
+                          {busyBulk === 'retry' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                          {t('webhooks.actions.retryAll')}
+                        </button>
+                        <button
+                          className="btn-secondary btn-sm danger-text"
+                          disabled={busyBulk === 'remove'}
+                          onClick={() => void handleRemoveAll()}
+                        >
+                          {busyBulk === 'remove' ? <Loader2 size={14} className="animate-spin" /> : <Ban size={14} />}
+                          {t('webhooks.actions.removeAll')}
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                  {deadLetters.length === 0 ? (
+                    <p className="deliveries-empty">{t('webhooks.deliveries.noDeadLetters')}</p>
+                  ) : (
+                    <div className="deliveries-table">
+                      <div className="table-row header">
+                        <span>{t('webhooks.columns.event')}</span>
+                        <span>{t('webhooks.columns.attempt')}</span>
+                        <span>{t('webhooks.columns.reason')}</span>
+                        <span>{t('webhooks.columns.time')}</span>
+                        <span>{t('webhooks.columns.actions')}</span>
+                      </div>
+                      {deadLetters.map(d => (
+                        <div key={d.jobId} className="table-row">
+                          <span>
+                            <code className="delivery-event">{d.event}</code>
+                          </span>
+                          <span>{d.attemptsMade}</span>
+                          <span className="delivery-failure-reason" title={d.failedReason}>
+                            {d.failedReason || '—'}
+                          </span>
+                          <span>{d.timestamp ? new Date(d.timestamp).toLocaleString() : '—'}</span>
+                          <span className="actions-cell">
+                            {canWrite && (
+                              <>
+                                <button
+                                  className="icon-btn"
+                                  title={t('webhooks.actions.retry')}
+                                  disabled={busyJobId === d.jobId}
+                                  onClick={() => void handleRetryJob(d.jobId)}
+                                >
+                                  {busyJobId === d.jobId ? (
+                                    <Loader2 size={16} className="animate-spin" />
+                                  ) : (
+                                    <RefreshCw size={16} />
+                                  )}
+                                </button>
+                                <button
+                                  className="icon-btn danger"
+                                  title={t('webhooks.actions.remove')}
+                                  disabled={busyJobId === d.jobId}
+                                  onClick={() => void handleRemoveJob(d.jobId)}
+                                >
+                                  <Ban size={16} />
+                                </button>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

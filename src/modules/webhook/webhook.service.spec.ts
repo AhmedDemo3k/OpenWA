@@ -358,15 +358,21 @@ describe('WebhookService', () => {
 
     it('attaches a timestamp and nonce when replay protection is enabled', async () => {
       const replayConfig = {
-        get: jest.fn().mockImplementation(<T>(key: string, def?: T): T | number => {
+        get: jest.fn().mockImplementation(<T>(key: string, def?: T) => {
           if (key === 'queue.enabled') return false;
           if (key === 'webhook.enableReplayProtection') return true;
           if (key === 'webhook.replayTtlMs') return 300_000;
-          return def as T;
+          return def;
         }),
       } as unknown as ConfigService;
 
-      const replayService = new WebhookService(repository, deliveryLogRepo, nonceRepo, replayConfig, hookManager);
+      const replayService = new WebhookService(
+        repository as unknown as Repository<Webhook>,
+        deliveryLogRepo as unknown as Repository<WebhookDeliveryLog>,
+        nonceRepo as unknown as Repository<WebhookNonce>,
+        replayConfig,
+        hookManager as unknown as HookManager,
+      );
 
       const webhook = createMockWebhook({ events: ['message.received'], secret: 's3cret' });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);

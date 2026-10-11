@@ -45,7 +45,9 @@
     "logout": "Logout",
     "refresh": "Refresh",
     "errorGeneric": "An error occurred",
-    "unknownError": "Unknown error"
+    "unknownError": "Unknown error",
+    "success": "Success",
+    "failed": "Failed"
   },
   "theme": {
     "light": "Light",
@@ -213,11 +215,28 @@
       "events": "Events",
       "session": "Session",
       "status": "Status",
-      "actions": "Actions"
+      "actions": "Actions",
+      "result": "Result",
+      "event": "Event",
+      "duration": "Duration",
+      "attempt": "Attempt",
+      "time": "Time",
+      "reason": "Reason"
     },
     "empty": {
       "title": "No webhooks configured",
       "description": "Add a webhook to receive real-time event notifications"
+    },
+    "status": {
+      "paused": "Paused",
+      "failures": "consecutive failures"
+    },
+    "deliveriesTitle": "Delivery History & Dead Letters",
+    "deliveries": {
+      "recent": "Recent deliveries",
+      "empty": "No delivery attempts recorded yet. Deliveries appear here once an event fires.",
+      "deadLetters": "Dead letters (retries exhausted)",
+      "noDeadLetters": "No dead-lettered deliveries. All good."
     },
     "toasts": {
       "created": "Webhook created successfully",
@@ -228,19 +247,42 @@
       "updateFailed": "Failed to update webhook: {{message}}",
       "testOk": "Webhook test successful! Status: {{status}}",
       "testFailed": "Webhook test failed: {{message}}",
-      "testError": "Failed to test webhook: {{message}}"
+      "testError": "Failed to test webhook: {{message}}",
+      "logsFailed": "Failed to load delivery history: {{message}}",
+      "retried": "Delivery requeued",
+      "removed": "Delivery discarded",
+      "retriedAll": "Requeued {{retried}} dead-lettered deliveries",
+      "removedAll": "All dead-lettered deliveries discarded",
+      "paused": "Webhook paused",
+      "resumed": "Webhook resumed"
     },
     "actions": {
       "test": "Test",
       "edit": "Edit",
-      "delete": "Delete"
+      "delete": "Delete",
+      "logs": "Deliveries & dead letters",
+      "resume": "Resume delivery",
+      "retry": "Requeue",
+      "remove": "Discard",
+      "retryAll": "Retry all",
+      "removeAll": "Discard all"
     },
     "eventDescriptions": {
       "message.received": "When a message is received",
       "message.sent": "When a message is sent",
-      "session.connected": "When a session connects",
-      "session.disconnected": "When a session disconnects",
+      "message.ack": "When a message ack changes",
+      "message.delivered": "When a message is delivered",
+      "message.read": "When a message is read",
+      "message.revoked": "When a message is revoked",
+      "session.created": "When a session is created",
+      "session.deleted": "When a session is deleted",
+      "session.status": "When a session status changes",
       "session.qr": "When QR code is generated",
+      "session.authenticated": "When a session is authenticated",
+      "session.disconnected": "When a session disconnects",
+      "group.join": "When a group join event fires",
+      "group.leave": "When a group leave event fires",
+      "group.update": "When a group is updated",
       "all": "All events"
     }
   },

@@ -40,8 +40,44 @@ export interface Webhook {
   events: string[];
   active: boolean;
   secret?: string;
+  paused?: boolean | null;
+  pausedAt?: string | null;
+  pauseReason?: string | null;
+  lastTriggeredAt?: string | null;
+  lastSuccessAt?: string | null;
+  lastFailureAt?: string | null;
+  lastStatusCode?: number | null;
+  lastError?: string | null;
+  consecutiveFailures?: number;
+  retryCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WebhookDeliveryLog {
+  id: string;
+  webhookId: string;
+  event: string;
+  deliveryId: string;
+  idempotencyKey?: string | null;
+  jobId?: string | null;
+  success: boolean;
+  statusCode?: number | null;
+  error?: string | null;
+  responseTimeMs?: number | null;
+  attempt?: number | null;
+  headers?: Record<string, string>;
+  createdAt: string;
+}
+
+export interface WebhookDeadLetter {
+  jobId: string;
+  event: string;
+  deliveryId: string;
+  attemptsMade: number;
+  failedReason: string;
+  timestamp: string | null;
+  url: string;
 }
 
 export interface ApiKey {
@@ -219,6 +255,26 @@ export const webhookApi = {
   test: (sessionId: string, id: string) =>
     request<{ success: boolean; statusCode?: number; error?: string }>(`/sessions/${sessionId}/webhooks/${id}/test`, {
       method: 'POST',
+    }),
+  deliver: (sessionId: string, id: string, limit = 50) =>
+    request<WebhookDeliveryLog[]>(`/sessions/${sessionId}/webhooks/${id}/deliveries?limit=${limit}`),
+  listDeadLetters: (sessionId: string, id: string, limit = 50) =>
+    request<WebhookDeadLetter[]>(`/sessions/${sessionId}/webhooks/${id}/deliveries/failed?limit=${limit}`),
+  retryDeadLetter: (sessionId: string, id: string, jobId: string) =>
+    request<{ jobId: string; retried: true }>(`/sessions/${sessionId}/webhooks/${id}/deliveries/${jobId}/retry`, {
+      method: 'POST',
+    }),
+  removeDeadLetter: (sessionId: string, id: string, jobId: string) =>
+    request<{ jobId: string; removed: true }>(`/sessions/${sessionId}/webhooks/${id}/deliveries/${jobId}`, {
+      method: 'DELETE',
+    }),
+  retryAllDeadLetters: (sessionId: string, id: string) =>
+    request<{ retried: number; skipped: number }>(`/sessions/${sessionId}/webhooks/${id}/deliveries/retry-all`, {
+      method: 'POST',
+    }),
+  removeAllDeadLetters: (sessionId: string, id: string) =>
+    request<{ removed: number; skipped: number }>(`/sessions/${sessionId}/webhooks/${id}/deliveries`, {
+      method: 'DELETE',
     }),
 };
 

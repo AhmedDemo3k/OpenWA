@@ -21,6 +21,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paginated history view.
 - **Dashboard stats tiles**: active sessions, messages sent/received today, and API calls today are
   now backed by the real `/api/stats/overview` endpoint instead of placeholder numbers.
+- **Webhook hardening (security)**:
+  - URL **allowlist** (`webhook.allowedUrls`) and SSRF protection by default
+    (`webhook.blockPrivateIps`) validated on create/update, plus new `message.delivered`,
+    `message.read`, `session.created`, `session.deleted` event types.
+  - `X-OpenWA-Webhook-Version: 1` header on every delivery and test ping.
+  - Error responses are captured and **truncated** (`webhook.maxErrorBodyChars`) into the
+    delivery log and `lastError` instead of only the status line.
+  - **Retry-After** is honored on queued (via `moveToDelayed` + `DelayedError`) and direct
+    delivery paths, with optional **jitter** (`webhook.jitterMs`) on exponential backoff.
+  - Opt-in **replay protection** (`webhook.enableReplayProtection`): body gains a timestamp
+    `t` + single-use `nonce` covered by the HMAC signature; nonces are persisted in a
+    `webhook_nonces` table with a TTL.
+- **Webhook reliability**:
+  - **Delivery history** persisted per attempt in a new `webhook_delivery_logs` table
+    (success/status/response time/error/idempotency), exposed via
+    `GET /sessions/:sid/webhooks/:id/deliveries`.
+  - **Persistent idempotency**: an event already delivered successfully to a webhook is
+    skipped (dedup survives restarts).
+  - **Circuit breaker**: after `webhook.circuitBreakerFailures` consecutive failures the
+    webhook is paused (`paused`, `pausedAt`, `pauseReason`) with a cooldown
+    (`webhook.circuitBreakerCooldownMs`) and can be resumed via the API or dashboard.
+  - **Per-webhook rate limiter** (60/min sliding window) applied at dispatch.
+  - DLQ **bulk actions**: `POST .../deliveries/retry-all` and `DELETE .../deliveries`.
+- **Dashboard webhooks UI**: health badges (paused + last status code + failure count),
+  pause/resume, a Delivery & Dead Letters drawer with per-job retry/discard and
+  bulk retry/discard-all, and the expanded event reference (English and Arabic).
+- **Postgres migration** `1780000000000-AddWebhookHardening` for the new columns/tables
+  (SQLite auto-syncs through the entity).
 
 ### Changed
 

@@ -45,7 +45,9 @@
     "logout": "تسجيل خروج",
     "refresh": "تحديث",
     "errorGeneric": "حدث خطأ",
-    "unknownError": "خطأ غير معروف"
+    "unknownError": "خطأ غير معروف",
+    "success": "نجاح",
+    "failed": "فشل"
   },
   "theme": {
     "light": "فاتح",
@@ -213,11 +215,28 @@
       "events": "الأحداث",
       "session": "الجلسة",
       "status": "الحالة",
-      "actions": "إجراءات"
+      "actions": "إجراءات",
+      "result": "النتيجة",
+      "event": "الحدث",
+      "duration": "المدة",
+      "attempt": "المحاولة",
+      "time": "الوقت",
+      "reason": "السبب"
     },
     "empty": {
       "title": "لا توجد Webhooks مُعدة",
       "description": "أضف Webhook لاستقبال الإشعارات في الوقت الفعلي"
+    },
+    "status": {
+      "paused": "موقوف",
+      "failures": "فشل متتالي"
+    },
+    "deliveriesTitle": "سجل التسليم والرسائل الميتة",
+    "deliveries": {
+      "recent": "آخر عمليات التسليم",
+      "empty": "لا توجد محاولات تسليم بعد. ستظهر هنا عند وقوع حدث.",
+      "deadLetters": "الرسائل الميتة (انتهت المحاولات)",
+      "noDeadLetters": "لا توجد رسائل ميتة. كل شيء على ما يرام."
     },
     "toasts": {
       "created": "تم إنشاء Webhook بنجاح",
@@ -228,19 +247,42 @@
       "updateFailed": "فشل تحديث Webhook: {{message}}",
       "testOk": "اختبار Webhook ناجح! الحالة: {{status}}",
       "testFailed": "فشل اختبار Webhook: {{message}}",
-      "testError": "فشل اختبار Webhook: {{message}}"
+      "testError": "فشل اختبار Webhook: {{message}}",
+      "logsFailed": "فشل تحميل سجل التسليم: {{message}}",
+      "retried": "تمت إعادة جدولة التسليم",
+      "removed": "تم تجاهل التسليم",
+      "retriedAll": "تمت إعادة جدولة {{retried}} من الرسائل الميتة",
+      "removedAll": "تم تجاهل كل الرسائل الميتة",
+      "paused": "تم إيقاف Webhook",
+      "resumed": "تم استئناف Webhook"
     },
     "actions": {
       "test": "اختبار",
       "edit": "تعديل",
-      "delete": "حذف"
+      "delete": "حذف",
+      "logs": "عمليات التسليم والرسائل الميتة",
+      "resume": "استئناف التسليم",
+      "retry": "إعادة جدولة",
+      "remove": "تجاهل",
+      "retryAll": "إعادة جدولة الكل",
+      "removeAll": "تجاهل الكل"
     },
     "eventDescriptions": {
       "message.received": "عند استلام رسالة",
       "message.sent": "عند إرسال رسالة",
-      "session.connected": "عند اتصال جلسة",
-      "session.disconnected": "عند فصل جلسة",
+      "message.ack": "عند تغيير حالة إيصال الرسالة",
+      "message.delivered": "عند استلام الرسالة",
+      "message.read": "عند قراءة الرسالة",
+      "message.revoked": "عند سحب الرسالة",
+      "session.created": "عند إنشاء جلسة",
+      "session.deleted": "عند حذف جلسة",
+      "session.status": "عند تغيير حالة الجلسة",
       "session.qr": "عند إنشاء رمز QR",
+      "session.authenticated": "عند توثيق الجلسة",
+      "session.disconnected": "عند فصل جلسة",
+      "group.join": "عند حدث انضمام لمجموعة",
+      "group.leave": "عند حدث مغادرة مجموعة",
+      "group.update": "عند تحديث مجموعة",
       "all": "كل الأحداث"
     }
   },
