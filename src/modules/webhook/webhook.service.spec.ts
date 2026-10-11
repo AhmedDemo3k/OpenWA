@@ -7,6 +7,8 @@ import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { WebhookService, WebhookPayload } from './webhook.service';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryLog } from './entities/webhook-delivery-log.entity';
+import { WebhookNonce } from './entities/webhook-nonce.entity';
 import { HookManager } from '../../core/hooks';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { Session } from '../session/entities/session.entity';
@@ -28,6 +30,9 @@ function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
     lastStatusCode: null,
     lastError: null,
     consecutiveFailures: 0,
+    paused: false,
+    pausedAt: null,
+    pauseReason: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     session: undefined as unknown as Session,
@@ -38,9 +43,20 @@ function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
 describe('WebhookService', () => {
   let service: WebhookService;
   let repository: jest.Mocked<Partial<Repository<Webhook>>>;
+  let deliveryLogRepo: jest.Mocked<Partial<Repository<WebhookDeliveryLog>>>;
+  let nonceRepo: jest.Mocked<Partial<Repository<WebhookNonce>>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let webhookQueue: jest.Mocked<Record<string, jest.Mock>>;
+
+  // Shared providers for every TestingModule built in this suite, since the service now
+  // also injects the delivery-log and nonce repositories.
+  function extraProviders() {
+    return [
+      { provide: getRepositoryToken(WebhookDeliveryLog, 'data'), useValue: deliveryLogRepo },
+      { provide: getRepositoryToken(WebhookNonce, 'data'), useValue: nonceRepo },
+    ];
+  }
 
   beforeEach(async () => {
     repository = {
@@ -51,6 +67,19 @@ describe('WebhookService', () => {
       remove: jest.fn(),
       update: jest.fn(),
     };
+
+    deliveryLogRepo = {
+      create: jest.fn((v: Partial<WebhookDeliveryLog>) => v),
+      save: jest.fn().mockResolvedValue(undefined),
+      findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn().mockResolvedValue([]),
+    } as unknown as jest.Mocked<Partial<Repository<WebhookDeliveryLog>>>;
+
+    nonceRepo = {
+      create: jest.fn((v: Partial<WebhookNonce>) => v),
+      save: jest.fn().mockResolvedValue(undefined),
+      findOne: jest.fn().mockResolvedValue(null),
+    } as unknown as jest.Mocked<Partial<Repository<WebhookNonce>>>;
 
     configService = {
       get: jest.fn().mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
@@ -76,6 +105,7 @@ describe('WebhookService', () => {
       providers: [
         WebhookService,
         { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+        ...extraProviders(),
         { provide: ConfigService, useValue: configService },
         { provide: HookManager, useValue: hookManager },
         { provide: getQueueToken(QUEUE_NAMES.WEBHOOK), useValue: webhookQueue },
@@ -126,6 +156,42 @@ describe('WebhookService', () => {
           secret: 'my-secret',
         }),
       );
+    });
+
+    it('rejects private/loopback URLs by default', async () => {
+      const webhook = createMockWebhook();
+      (repository.create as jest.Mock).mockReturnValue(webhook);
+      (repository.save as jest.Mock).mockResolvedValue(webhook);
+
+      await expect(service.create('sess-1', { url: 'http://localhost:3000/hook' })).rejects.toThrow('Private/loopback');
+      await expect(service.create('sess-1', { url: 'https://example.com/hook' })).resolves.toBeDefined();
+      expect(repository.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('enforces the configured allowlist', async () => {
+      configService.get = jest.fn().mockImplementation(<T>(key: string, def?: T): T => {
+        if (key === 'webhook.allowedUrls') return ['https://ok.example.com'] as unknown as T;
+        return def as T;
+      });
+      await expect(service.create('sess-1', { url: 'https://other.example.com/hook' })).rejects.toThrow('allowlist');
+    });
+  });
+
+  describe('listDeliveryLogs', () => {
+    it('lists recent delivery attempts with ownership check', async () => {
+      const logs = [{ id: 'log-1' }] as unknown as WebhookDeliveryLog[];
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook({ sessionId: 'sess-1' }));
+      (deliveryLogRepo.find as jest.Mock).mockResolvedValue(logs);
+
+      await expect(service.listDeliveryLogs('sess-1', 'wh-1', 25)).resolves.toEqual(logs);
+      expect(deliveryLogRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { webhookId: 'wh-1' }, take: 25 }),
+      );
+    });
+
+    it('treats a cross-session webhook as not found', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockWebhook({ sessionId: 'other-sess' }));
+      await expect(service.listDeliveryLogs('sess-1', 'wh-1')).rejects.toThrow('not found');
     });
   });
 
@@ -289,6 +355,56 @@ describe('WebhookService', () => {
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    it('attaches a timestamp and nonce when replay protection is enabled', async () => {
+      const replayConfig = {
+        get: jest.fn().mockImplementation(<T>(key: string, def?: T): T | number => {
+          if (key === 'queue.enabled') return false;
+          if (key === 'webhook.enableReplayProtection') return true;
+          if (key === 'webhook.replayTtlMs') return 300_000;
+          return def as T;
+        }),
+      } as unknown as ConfigService;
+
+      const replayService = new WebhookService(repository, deliveryLogRepo, nonceRepo, replayConfig, hookManager);
+
+      const webhook = createMockWebhook({ events: ['message.received'], secret: 's3cret' });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      const capturedBody: { t?: number; nonce?: string } = {};
+      let capturedHeaders: Record<string, string> = {};
+      const replayFetch = jest.fn().mockImplementation((_url: string, opts: RequestInit) => {
+        Object.assign(capturedBody, JSON.parse(opts.body as string));
+        capturedHeaders = opts.headers as Record<string, string>;
+        return Promise.resolve({ ok: true, status: 200 });
+      });
+      global.fetch = replayFetch as typeof global.fetch;
+
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: {
+          sessionId: 'sess-1',
+          event: 'message.received',
+          payload: {
+            event: 'message.received',
+            timestamp: '',
+            sessionId: 'sess-1',
+            idempotencyKey: 'k',
+            deliveryId: 'd',
+            data: {},
+          },
+        },
+      });
+
+      await replayService.dispatch('sess-1', 'message.received', {});
+
+      expect(typeof capturedBody.t).toBe('number');
+      expect(typeof capturedBody.nonce).toBe('string');
+      expect(capturedHeaders['X-OpenWA-Nonce']).toBe(capturedBody.nonce);
+      expect(capturedHeaders['X-OpenWA-Signature']).toBeTruthy();
+      expect(nonceRepo.save).toHaveBeenCalled();
+    });
   });
 
   // ── generateSignature (via dispatch) ──────────────────────────────
@@ -356,6 +472,7 @@ describe('WebhookService', () => {
         providers: [
           WebhookService,
           { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          ...extraProviders(),
           {
             provide: ConfigService,
             useValue: {
@@ -419,6 +536,7 @@ describe('WebhookService', () => {
         providers: [
           WebhookService,
           { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          ...extraProviders(),
           {
             provide: ConfigService,
             useValue: {

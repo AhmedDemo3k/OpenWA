@@ -38,7 +38,8 @@ describe('recordDeliveryOutcome', () => {
     // Increment is expressed as a raw SQL expression so concurrent attempts cannot
     // lose an increment; and the retry budget column is never touched.
     expect(typeof patch.consecutiveFailures).toBe('function');
-    expect(patch.consecutiveFailures()).toBe('"consecutiveFailures" + 1');
+    const cf = patch.consecutiveFailures as () => string;
+    expect(cf()).toBe('"consecutiveFailures" + 1');
     expect(patch.retryCount).toBeUndefined();
   });
 

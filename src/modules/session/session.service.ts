@@ -248,6 +248,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       source: 'SessionService',
     });
 
+    this.safely('webhook:session.created', saved.id, () =>
+      this.webhookService.dispatch(saved.id, 'session.created', { id: saved.id, name: saved.name }),
+    );
+
     return saved;
   }
 
@@ -302,6 +306,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
           sessionId: id,
           source: 'SessionService',
         },
+      );
+
+      // Dispatch before the row (and its webhooks) are removed so subscribers receive it.
+      this.safely('webhook:session.deleted', id, () =>
+        this.webhookService.dispatch(id, 'session.deleted', {
+          id: session.id,
+          name: session.name,
+          phone: session.phone,
+        }),
       );
 
       await this.dataSource.transaction(async manager => {

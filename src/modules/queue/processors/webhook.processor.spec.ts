@@ -130,6 +130,42 @@ describe('WebhookProcessor', () => {
 
       expect(result.success).toBe(true);
     });
+
+    it('captures a truncated error body from the endpoint', async () => {
+      stubFetch(async () => ({
+        ok: false,
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        headers: { get: () => 'application/json' },
+        text: async () => '{"error":"the payable amount\n differs from the quoted amount"}',
+        body: undefined,
+      }));
+
+      await expect(processor.process(makeJob())).rejects.toThrow('Unprocessable Entity');
+      const calls = update.mock.calls as [string, Record<string, unknown>][];
+      const [, patch] = calls[0];
+      expect(String(patch.lastError)).toContain('the payable amount  differs');
+    });
+
+    it('respects an explicit Retry-After by rescheduling before throwing DelayedError', async () => {
+      stubFetch(async () => ({
+        ok: false,
+        status: 429,
+        statusText: 'Too Many Requests',
+        headers: { get: () => '10' },
+        body: undefined,
+      }));
+
+      const moveToDelayed = jest.fn().mockResolvedValue(undefined);
+      const job = makeJob({ attemptsMade: 1 }) as unknown as Record<string, unknown>;
+      job.token = 'tok-1';
+
+      job.moveToDelayed = moveToDelayed;
+
+      await expect(processor.process(job as unknown as Job<WebhookJobData>)).rejects.toThrow(/delayed/i);
+
+      expect(moveToDelayed).toHaveBeenCalledWith(expect.any(Number), 'tok-1');
+    });
   });
 
   describe('onJobFailed', () => {

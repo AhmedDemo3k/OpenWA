@@ -5,7 +5,11 @@ export const WEBHOOK_EVENTS = [
   'message.received',
   'message.sent',
   'message.ack',
+  'message.delivered',
+  'message.read',
   'message.revoked',
+  'session.created',
+  'session.deleted',
   'session.status',
   'session.qr',
   'session.authenticated',
@@ -88,6 +92,13 @@ export class UpdateWebhookDto {
   @IsBoolean()
   active?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'Pause delivery (set false to resume after a circuit-breaker trip)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  paused?: boolean;
+
   @ApiPropertyOptional({ description: 'Retry count' })
   @IsOptional()
   @IsInt()
@@ -135,6 +146,15 @@ export class WebhookResponseDto {
 
   @ApiPropertyOptional()
   consecutiveFailures?: number;
+
+  @ApiPropertyOptional({ description: 'Whether delivery is paused (circuit breaker or manual)' })
+  paused?: boolean;
+
+  @ApiPropertyOptional()
+  pausedAt?: Date | null;
+
+  @ApiPropertyOptional()
+  pauseReason?: string | null;
 
   @ApiProperty()
   createdAt: Date;

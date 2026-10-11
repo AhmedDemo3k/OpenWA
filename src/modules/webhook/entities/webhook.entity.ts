@@ -62,6 +62,15 @@ export class Webhook {
   @Column({ type: 'int', default: 0 })
   consecutiveFailures: number;
 
+  @Column({ type: 'boolean', default: false })
+  paused: boolean;
+
+  @Column({ type: dateColumnType(), nullable: true, transformer: DateTransformer })
+  pausedAt: Date | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  pauseReason: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -6,12 +6,19 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue, Job } from 'bullmq';
 import * as crypto from 'crypto';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryLog } from './entities/webhook-delivery-log.entity';
+import { WebhookNonce } from './entities/webhook-nonce.entity';
 import { CreateWebhookDto, UpdateWebhookDto, WebhookDeliveryDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
 import { recordDeliveryOutcome } from './utils/delivery-stats.util';
 import { HookManager } from '../../core/hooks';
+import { validateWebhookUrl } from './utils/url-validator.util';
+import { extractErrorBody, truncateErrorBody } from './utils/error-body.util';
+import { parseRetryAfter, withJitter } from './utils/retry.util';
+import { SimpleRateLimiter } from './utils/rate-limiter.util';
+import { generateNonce, buildSignedPayload } from './utils/signing.util';
 
 export interface WebhookPayload {
   event: string;
@@ -38,9 +45,22 @@ export class WebhookService {
   private readonly logger = createLogger('WebhookService');
   private readonly queueEnabled: boolean;
 
+  private readonly rlPerWebhook: SimpleRateLimiter;
+  private readonly cbFailures: number;
+  private readonly cbCooldown: number;
+  private readonly maxErrorBodyChars: number;
+  private readonly respectRetryAfter: boolean;
+  private readonly jitterMs: number;
+  private readonly replayProtection: boolean;
+  private readonly replayTtlMs: number;
+
   constructor(
     @InjectRepository(Webhook, 'data')
     private readonly webhookRepository: Repository<Webhook>,
+    @InjectRepository(WebhookDeliveryLog, 'data')
+    private readonly deliveryLogRepo: Repository<WebhookDeliveryLog>,
+    @InjectRepository(WebhookNonce, 'data')
+    private readonly nonceRepo: Repository<WebhookNonce>,
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     @Optional()
@@ -48,9 +68,82 @@ export class WebhookService {
     private readonly webhookQueue?: Queue<WebhookJobData>,
   ) {
     this.queueEnabled = configService.get<boolean>('queue.enabled', false);
+    this.rlPerWebhook = new SimpleRateLimiter(60_000, 60);
+    this.cbFailures = this.configService.get<number>('webhook.circuitBreakerFailures', 10);
+    this.cbCooldown = this.configService.get<number>('webhook.circuitBreakerCooldownMs', 300_000);
+    this.maxErrorBodyChars = this.configService.get<number>('webhook.maxErrorBodyChars', 200);
+    this.respectRetryAfter = this.configService.get<boolean>('webhook.respectRetryAfter', true);
+    this.jitterMs = this.configService.get<number>('webhook.jitterMs', 1000);
+    this.replayProtection = this.configService.get<boolean>('webhook.enableReplayProtection', false);
+    this.replayTtlMs = this.configService.get<number>('webhook.replayTtlMs', 300_000);
+  }
+
+  private checkCircuit(webhook: Webhook): void {
+    if (webhook.paused) {
+      const cooldown = this.cbCooldown;
+      if (webhook.pausedAt && Date.now() - new Date(webhook.pausedAt).getTime() < cooldown) {
+        throw new BadRequestException(`Webhook is paused: ${webhook.pauseReason || 'circuit breaker'}`);
+      }
+      // auto-unpause after cooldown? keep manual for safety; but allow if expired? skip hard block
+    }
+  }
+
+  private async maybeTripCircuit(webhook: Webhook): Promise<void> {
+    const failures = (webhook.consecutiveFailures || 0) + 1;
+    if (failures >= this.cbFailures && !webhook.paused) {
+      webhook.paused = true;
+      webhook.pausedAt = new Date();
+      webhook.pauseReason = `Circuit breaker: ${failures} consecutive failures`;
+      await this.webhookRepository.save(webhook);
+      this.logger.warn('Webhook paused by circuit breaker', {
+        webhookId: webhook.id,
+        consecutiveFailures: failures,
+        action: 'webhook_paused_circuit',
+      });
+    }
+  }
+
+  private async logDelivery(d: Partial<WebhookDeliveryLog>): Promise<void> {
+    try {
+      await this.deliveryLogRepo.save(this.deliveryLogRepo.create(d));
+    } catch (e) {
+      this.logger.warn('Failed to persist webhook delivery log', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /**
+   * Persistent idempotency: has this exact event already been delivered successfully to
+   * this webhook? Backed by the delivery-log table so it survives process restarts.
+   */
+  private async hasSucceeded(webhookId: string, idempotencyKey: string): Promise<boolean> {
+    if (!idempotencyKey) return false;
+    try {
+      const row = await this.deliveryLogRepo.findOne({
+        where: { webhookId, idempotencyKey, success: true },
+      });
+      return !!row;
+    } catch {
+      return false;
+    }
+  }
+
+  async listDeliveryLogs(sessionId: string, webhookId: string, limit = 50): Promise<WebhookDeliveryLog[]> {
+    await this.findOwned(sessionId, webhookId);
+    return this.deliveryLogRepo.find({
+      where: { webhookId },
+      order: { createdAt: 'DESC' },
+      take: Math.min(Math.max(limit, 1), 200),
+    });
   }
 
   async create(sessionId: string, dto: CreateWebhookDto): Promise<Webhook> {
+    const allowed = this.configService.get<string[]>('webhook.allowedUrls', []);
+    const blockPriv = this.configService.get<boolean>('webhook.blockPrivateIps', true);
+    const v = validateWebhookUrl(dto.url, allowed, blockPriv);
+    if (!v.ok) throw new BadRequestException(v.reason || 'Invalid webhook URL');
+
     const webhook = this.webhookRepository.create({
       sessionId,
       url: dto.url,
@@ -58,6 +151,9 @@ export class WebhookService {
       secret: dto.secret || null,
       headers: dto.headers || {},
       retryCount: dto.retryCount ?? 3,
+      paused: false,
+      pausedAt: null,
+      pauseReason: null,
     });
 
     return this.webhookRepository.save(webhook);
@@ -87,12 +183,29 @@ export class WebhookService {
   async update(id: string, dto: UpdateWebhookDto): Promise<Webhook> {
     const webhook = await this.findOne(id);
 
-    if (dto.url !== undefined) webhook.url = dto.url;
+    if (dto.url !== undefined) {
+      const allowed = this.configService.get<string[]>('webhook.allowedUrls', []);
+      const blockPriv = this.configService.get<boolean>('webhook.blockPrivateIps', true);
+      const v = validateWebhookUrl(dto.url, allowed, blockPriv);
+      if (!v.ok) throw new BadRequestException(v.reason || 'Invalid webhook URL');
+      webhook.url = dto.url;
+    }
     if (dto.events !== undefined) webhook.events = dto.events;
     if (dto.secret !== undefined) webhook.secret = dto.secret;
     if (dto.headers !== undefined) webhook.headers = dto.headers;
     if (dto.active !== undefined) webhook.active = dto.active;
     if (dto.retryCount !== undefined) webhook.retryCount = dto.retryCount;
+    if (dto.paused !== undefined) {
+      webhook.paused = dto.paused;
+      if (dto.paused) {
+        webhook.pausedAt = webhook.pausedAt ?? new Date();
+        webhook.pauseReason = webhook.pauseReason ?? 'Paused manually';
+      } else {
+        // Resuming clears the circuit-breaker state so a fresh failure count starts.
+        webhook.pausedAt = null;
+        webhook.pauseReason = null;
+      }
+    }
 
     return this.webhookRepository.save(webhook);
   }
@@ -104,6 +217,7 @@ export class WebhookService {
 
   async test(sessionId: string, webhookId: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {
     const webhook = await this.findOne(webhookId);
+    this.checkCircuit(webhook);
 
     const testPayload: WebhookPayload = {
       event: 'test',
@@ -126,6 +240,7 @@ export class WebhookService {
       'X-OpenWA-Idempotency-Key': testPayload.idempotencyKey,
       'X-OpenWA-Delivery-Id': testPayload.deliveryId,
       'X-OpenWA-Retry-Count': '0',
+      'X-OpenWA-Webhook-Version': '1',
       ...webhook.headers,
     };
 
@@ -138,7 +253,7 @@ export class WebhookService {
         method: 'POST',
         headers,
         body,
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
       });
 
       return {
@@ -165,6 +280,24 @@ export class WebhookService {
 
     // Dispatch to all matching webhooks
     for (const webhook of matchingWebhooks) {
+      try {
+        this.checkCircuit(webhook);
+      } catch {
+        this.logger.debug('Skipping webhook due to circuit', { webhookId: webhook.id });
+        continue;
+      }
+      if (!this.rlPerWebhook.check(`wh:${webhook.id}`)) {
+        this.logger.warn('Webhook rate limited', { webhookId: webhook.id });
+        continue;
+      }
+      // Persistent idempotency: skip events already delivered successfully.
+      if (await this.hasSucceeded(webhook.id, idempotencyKey)) {
+        this.logger.debug('Skipping already-delivered webhook event', {
+          webhookId: webhook.id,
+          idempotencyKey,
+        });
+        continue;
+      }
       // Generate unique delivery ID for each webhook
       const deliveryId = generateDeliveryId();
 
@@ -193,7 +326,20 @@ export class WebhookService {
       }
 
       // Use potentially modified payload
-      const finalPayload = (hookResult as { payload: WebhookPayload }).payload;
+      let finalPayload = (hookResult as { payload: WebhookPayload }).payload;
+
+      // Optional replay protection (opt-in): embed a timestamp + single-use nonce in the
+      // body so it is covered by the HMAC signature. The nonce is persisted (bounded by a
+      // TTL) so receivers can reject replayed deliveries.
+      let replayNonce: string | null = null;
+      if (this.replayProtection && webhook.secret) {
+        const signed = buildSignedPayload(finalPayload as unknown as Record<string, unknown>, generateNonce());
+        finalPayload = signed as unknown as WebhookPayload;
+        replayNonce = String(signed.nonce);
+        await this.nonceRepo
+          .save(this.nonceRepo.create({ nonce: replayNonce, expiresAt: Date.now() + this.replayTtlMs }))
+          .catch(() => undefined);
+      }
 
       // Build headers
       const headers: Record<string, string> = {
@@ -203,6 +349,8 @@ export class WebhookService {
         'X-OpenWA-Idempotency-Key': idempotencyKey,
         'X-OpenWA-Delivery-Id': deliveryId,
         'X-OpenWA-Retry-Count': '0',
+        'X-OpenWA-Webhook-Version': '1',
+        ...(replayNonce ? { 'X-OpenWA-Nonce': replayNonce } : {}),
         ...webhook.headers,
       };
 
@@ -315,6 +463,8 @@ export class WebhookService {
       headers['X-OpenWA-Signature'] = this.generateSignature(body, webhook.secret);
     }
 
+    const startedAt = Date.now();
+    let retryAfterMs: number | null = null;
     try {
       const response = await fetch(webhook.url, {
         method: 'POST',
@@ -324,9 +474,15 @@ export class WebhookService {
       });
 
       if (!response.ok) {
-        // Drain the body so undici can release the socket before we retry.
+        // Capture a short, sanitized error body before draining the socket. Many endpoints
+        // explain the failure (validation message, rate-limit reason) in the body but not
+        // the status line, which is all the DLQ otherwise shows.
+        const errBody = await extractErrorBody(response, this.maxErrorBodyChars);
         await response.body?.cancel().catch(() => undefined);
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        retryAfterMs = parseRetryAfter(response.headers.get('retry-after'));
+        const suffix = errBody ? ` - ${errBody}` : '';
+        const raSuffix = retryAfterMs !== null ? ` [retry-after=${retryAfterMs}ms]` : '';
+        throw new Error(`HTTP ${response.status}: ${response.statusText}${suffix}${raSuffix}`);
       }
 
       await response.body?.cancel().catch(() => undefined);
@@ -346,6 +502,19 @@ export class WebhookService {
         });
       });
 
+      await this.logDelivery({
+        webhookId: webhook.id,
+        event: payload.event,
+        deliveryId: payload.deliveryId,
+        idempotencyKey: payload.idempotencyKey,
+        success: true,
+        statusCode: response.status,
+        responseTimeMs: Date.now() - startedAt,
+        attempt,
+        headers,
+        meta: { idempotencyKey: payload.idempotencyKey },
+      });
+
       this.logger.debug(`Webhook delivered to ${webhook.id}`, {
         webhookId: webhook.id,
         deliveryId: payload.deliveryId,
@@ -355,6 +524,20 @@ export class WebhookService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
+      await this.logDelivery({
+        webhookId: webhook.id,
+        event: payload.event,
+        deliveryId: payload.deliveryId,
+        idempotencyKey: payload.idempotencyKey,
+        success: false,
+        statusCode: null,
+        error: truncateErrorBody(errorMessage, this.maxErrorBodyChars * 2),
+        responseTimeMs: Date.now() - startedAt,
+        attempt,
+        headers,
+        meta: { idempotencyKey: payload.idempotencyKey },
+      });
+
       this.logger.error(`Webhook delivery failed for ${webhook.id}`, errorMessage, {
         webhookId: webhook.id,
         attempt,
@@ -363,11 +546,18 @@ export class WebhookService {
       });
 
       if (attempt < webhook.retryCount) {
-        const delay = this.configService.get<number>('webhook.retryDelay', 5000);
-        // Exponential backoff, matching the queued path: delay, 2x, 4x, ...
-        await this.delay(delay * 2 ** (attempt - 1));
+        const baseDelay = this.configService.get<number>('webhook.retryDelay', 5000);
+        // Respect an explicit Retry-After when configured; otherwise exponential backoff,
+        // matching the queued path: delay, 2x, 4x, ... Both with jitter so a fleet of
+        // webhooks does not retry in lockstep.
+        const preferred =
+          this.respectRetryAfter && retryAfterMs !== null ? retryAfterMs : baseDelay * 2 ** (attempt - 1);
+        await this.delay(withJitter(preferred, this.jitterMs));
         return this.deliverWebhook(webhook, payload, headers, attempt + 1);
       }
+
+      // Terminal failure: trip the circuit breaker, then persist the failure telemetry.
+      await this.maybeTripCircuit(webhook).catch(() => undefined);
 
       // Terminal failure: persist the failure telemetry before propagating.
       await recordDeliveryOutcome(this.webhookRepository, webhook.id, {
@@ -439,6 +629,75 @@ export class WebhookService {
     });
 
     return { jobId: job.id as string, removed: true };
+  }
+
+  /**
+   * Requeue every dead-lettered delivery for a webhook. Returns how many were retried and
+   * how many were skipped (e.g. a job vanished between listing and retrying).
+   */
+  async retryAllDeadLetters(
+    sessionId: string,
+    webhookId: string,
+    limit = 200,
+  ): Promise<{ retried: number; skipped: number }> {
+    const webhook = await this.findOwned(sessionId, webhookId);
+    const queue = this.requireQueue();
+    const failed = await queue.getFailed(0, Math.max(1, Math.min(limit, 500)) - 1);
+    const jobs = failed.filter(job => job.name === `webhook-${webhook.id}`);
+
+    let retried = 0;
+    let skipped = 0;
+    for (const job of jobs) {
+      try {
+        await job.retry();
+        retried += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+
+    this.logger.log('Requeued dead-lettered webhook deliveries', {
+      webhookId,
+      action: 'webhook_dlq_retry_all',
+      retried,
+      skipped,
+    });
+
+    return { retried, skipped };
+  }
+
+  /**
+   * Discard every dead-lettered delivery for a webhook.
+   */
+  async removeAllDeadLetters(
+    sessionId: string,
+    webhookId: string,
+    limit = 200,
+  ): Promise<{ removed: number; skipped: number }> {
+    const webhook = await this.findOwned(sessionId, webhookId);
+    const queue = this.requireQueue();
+    const failed = await queue.getFailed(0, Math.max(1, Math.min(limit, 500)) - 1);
+    const jobs = failed.filter(job => job.name === `webhook-${webhook.id}`);
+
+    let removed = 0;
+    let skipped = 0;
+    for (const job of jobs) {
+      try {
+        await job.remove();
+        removed += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+
+    this.logger.log('Discarded dead-lettered webhook deliveries', {
+      webhookId,
+      action: 'webhook_dlq_remove_all',
+      removed,
+      skipped,
+    });
+
+    return { removed, skipped };
   }
 
   private async findOwned(sessionId: string, webhookId: string): Promise<Webhook> {

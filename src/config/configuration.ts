@@ -60,6 +60,20 @@ export default () => ({
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '10000', 10),
     maxRetries: parseInt(process.env.WEBHOOK_MAX_RETRIES || '3', 10),
     retryDelay: parseInt(process.env.WEBHOOK_RETRY_DELAY || '5000', 10),
+    // URL allowlist (comma-separated). If empty, all http(s) URLs allowed (with SSRF protection still enforced)
+    allowedUrls: (process.env.WEBHOOK_ALLOWED_URLS || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean),
+    // Enable/disable SSRF protection for private IPs/loopback
+    blockPrivateIps: process.env.WEBHOOK_BLOCK_PRIVATE_IPS !== 'false',
+    circuitBreakerFailures: parseInt(process.env.WEBHOOK_CIRCUIT_BREAKER_FAILURES || '10', 10),
+    circuitBreakerCooldownMs: parseInt(process.env.WEBHOOK_CIRCUIT_BREAKER_COOLDOWN_MS || '300000', 10), // 5m
+    respectRetryAfter: process.env.WEBHOOK_RESPECT_RETRY_AFTER !== 'false',
+    jitterMs: parseInt(process.env.WEBHOOK_JITTER_MS || '1000', 10),
+    maxErrorBodyChars: parseInt(process.env.WEBHOOK_MAX_ERROR_BODY_CHARS || '200', 10),
+    enableReplayProtection: process.env.WEBHOOK_REPLAY_PROTECTION === 'true',
+    replayTtlMs: parseInt(process.env.WEBHOOK_REPLAY_TTL_MS || '300000', 10),
   },
 
   // API configuration

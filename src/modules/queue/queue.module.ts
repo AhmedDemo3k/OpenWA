@@ -8,6 +8,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { WebhookProcessor } from './processors/webhook.processor';
 import { QUEUE_NAMES } from './queue-names';
 import { Webhook } from '../webhook/entities/webhook.entity';
+import { WebhookDeliveryLog } from '../webhook/entities/webhook-delivery-log.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
 
 // Re-export for backward compatibility
@@ -15,8 +16,8 @@ export { QUEUE_NAMES } from './queue-names';
 
 @Module({
   imports: [
-    // Required for WebhookProcessor to inject Repository<Webhook>
-    TypeOrmModule.forFeature([Webhook], 'data'),
+    // Required for WebhookProcessor to inject Repository<Webhook> and the delivery log
+    TypeOrmModule.forFeature([Webhook, WebhookDeliveryLog], 'data'),
     // Required for WebhookProcessor to inject HookManager
     HooksModule,
     BullModule.forRootAsync({

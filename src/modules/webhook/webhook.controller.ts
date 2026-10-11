@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/
 import { WebhookService } from './webhook.service';
 import { CreateWebhookDto, UpdateWebhookDto, WebhookResponseDto, WebhookDeliveryDto } from './dto';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryLog } from './entities/webhook-delivery-log.entity';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
@@ -106,6 +107,53 @@ export class WebhookController {
   ): Promise<WebhookDeliveryDto[]> {
     const parsed = limit ? Number.parseInt(limit, 10) : undefined;
     return this.webhookService.listDeadLetters(sessionId, id, parsed && Number.isFinite(parsed) ? parsed : undefined);
+  }
+
+  @Get(':id/deliveries')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'List recent delivery attempts (persistent history) for a webhook' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'id', description: 'Webhook ID' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max number of rows (default 50, max 200)' })
+  @ApiResponse({ status: 200, description: 'Recent delivery attempts' })
+  @ApiResponse({ status: 404, description: 'Webhook not found' })
+  async listDeliveries(
+    @Param('sessionId') sessionId: string,
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+  ): Promise<WebhookDeliveryLog[]> {
+    const parsed = limit ? Number.parseInt(limit, 10) : undefined;
+    return this.webhookService.listDeliveryLogs(sessionId, id, parsed && Number.isFinite(parsed) ? parsed : undefined);
+  }
+
+  @Post(':id/deliveries/retry-all')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Requeue every dead-lettered delivery for a webhook' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'id', description: 'Webhook ID' })
+  @ApiResponse({ status: 200, description: 'Bulk retry result' })
+  @ApiResponse({ status: 400, description: 'Webhook queue disabled' })
+  async retryAllDeadLetters(
+    @Param('sessionId') sessionId: string,
+    @Param('id') id: string,
+  ): Promise<{ retried: number; skipped: number }> {
+    return this.webhookService.retryAllDeadLetters(sessionId, id);
+  }
+
+  @Delete(':id/deliveries')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Discard every dead-lettered delivery for a webhook' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'id', description: 'Webhook ID' })
+  @ApiResponse({ status: 200, description: 'Bulk discard result' })
+  @ApiResponse({ status: 400, description: 'Webhook queue disabled' })
+  async removeAllDeadLetters(
+    @Param('sessionId') sessionId: string,
+    @Param('id') id: string,
+  ): Promise<{ removed: number; skipped: number }> {
+    return this.webhookService.removeAllDeadLetters(sessionId, id);
   }
 
   @Post(':id/deliveries/:jobId/retry')
