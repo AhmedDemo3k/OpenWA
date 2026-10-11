@@ -308,14 +308,22 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         },
       );
 
-      // Dispatch before the row (and its webhooks) are removed so subscribers receive it.
-      this.safely('webhook:session.deleted', id, () =>
-        this.webhookService.dispatch(id, 'session.deleted', {
+      // Await the dispatch *before* the transaction removes the session row: the FK is
+      // ON DELETE CASCADE, so a fire-and-forget dispatch would race the delete and read
+      // zero webhook rows, silently dropping the session.deleted event.
+      try {
+        await this.webhookService.dispatch(id, 'session.deleted', {
           id: session.id,
           name: session.name,
           phone: session.phone,
-        }),
-      );
+        });
+      } catch (error: unknown) {
+        this.logger.error(
+          'Failed to dispatch session.deleted webhook',
+          error instanceof Error ? error.message : String(error),
+          { sessionId: id, action: 'webhook_dispatch_failed', event: 'session.deleted' },
+        );
+      }
 
       await this.dataSource.transaction(async manager => {
         await manager.remove(session);

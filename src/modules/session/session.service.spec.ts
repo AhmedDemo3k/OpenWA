@@ -226,6 +226,39 @@ describe('SessionService', () => {
 
       expect(mockEngine.destroy).toHaveBeenCalled();
     });
+
+    it('dispatches session.deleted before removing the session row (no CASCADE race)', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+
+      const order: string[] = [];
+      (webhookService.dispatch as jest.Mock).mockImplementation(() => {
+        order.push('dispatch');
+        return Promise.resolve();
+      });
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb: (manager: unknown) => Promise<unknown>) => {
+        order.push('remove');
+        return cb({ save: jest.fn(), remove: jest.fn().mockResolvedValue(undefined) });
+      });
+
+      await service.delete('sess-uuid-1');
+
+      expect(webhookService.dispatch).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        'session.deleted',
+        expect.objectContaining({ id: 'sess-uuid-1', name: 'test-session' }),
+      );
+      expect(order).toEqual(['dispatch', 'remove']);
+    });
+
+    it('still deletes the session when the session.deleted dispatch fails', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (webhookService.dispatch as jest.Mock).mockRejectedValue(new Error('webhook db down'));
+
+      await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
+      expect(dataSource.transaction).toHaveBeenCalled();
+    });
   });
 
   // ── start ─────────────────────────────────────────────────────────
