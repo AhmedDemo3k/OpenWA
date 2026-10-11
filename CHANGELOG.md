@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Dispatch`/`SetStateAction`, and per-tab DTO shapes) and repaired an empty `catch` block; the
   dashboard lint now passes with zero errors.
 
+### Fixed
+
+- **Dashboard webhook delivery history**: the Delivery & Dead Letters drawer fetched deliveries and
+  dead letters together, so the dead-letter endpoint's `400` (returned when the BullMQ queue is
+  disabled, the default) caused the whole drawer to fail and hid the available deliveries. Both are
+  now fetched independently: deliveries always render, and the dead-letter section shows a "queue
+  disabled" note instead of an error. Also fixed the untranslated Arabic sidebar "Webhooks" label.
+
 ## [0.1.6] - 2026-05-17
 
 ### Fixed
