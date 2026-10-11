@@ -58,7 +58,7 @@
   "nav": {
     "dashboard": "لوحة التحكم",
     "sessions": "الجلسات",
-    "webhooks": "Webhooks",
+    "webhooks": "ويب هوكس",
     "apiKeys": "مفاتيح API",
     "messageTester": "اختبار الرسائل",
     "botSettings": "البوت التلقائي",
@@ -236,7 +236,8 @@
       "recent": "آخر عمليات التسليم",
       "empty": "لا توجد محاولات تسليم بعد. ستظهر هنا عند وقوع حدث.",
       "deadLetters": "الرسائل الميتة (انتهت المحاولات)",
-      "noDeadLetters": "لا توجد رسائل ميتة. كل شيء على ما يرام."
+      "noDeadLetters": "لا توجد رسائل ميتة. كل شيء على ما يرام.",
+      "queueDisabled": "طابور الرسائل الميتة معطّل (queue.enabled=false). فعّل طابور BullMQ لفحص الرسائل الميتة وإعادة إرسالها."
     },
     "toasts": {
       "created": "تم إنشاء Webhook بنجاح",

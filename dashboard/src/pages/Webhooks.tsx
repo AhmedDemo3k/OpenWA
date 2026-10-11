@@ -74,6 +74,7 @@ export function Webhooks() {
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const [busyBulk, setBusyBulk] = useState<'retry' | 'remove' | null>(null);
+  const [deadLettersUnavailable, setDeadLettersUnavailable] = useState(false);
 
   const eventDescription = (name: string) => {
     if (name === '*') return t('webhooks.eventDescriptions.all');
@@ -201,14 +202,11 @@ export function Webhooks() {
     setLogsTarget(webhook);
     setDeliveries([]);
     setDeadLetters([]);
+    setDeadLettersUnavailable(false);
     setLoadingLogs(true);
     try {
-      const [deliveriesRes, deadRes] = await Promise.all([
-        webhookApi.deliver(webhook.sessionId, webhook.id, 50),
-        webhookApi.listDeadLetters(webhook.sessionId, webhook.id, 50),
-      ]);
+      const deliveriesRes = await webhookApi.deliver(webhook.sessionId, webhook.id, 50);
       setDeliveries(deliveriesRes);
-      setDeadLetters(deadRes);
     } catch (err) {
       setToast({
         type: 'error',
@@ -216,9 +214,17 @@ export function Webhooks() {
           message: err instanceof Error ? err.message : t('common.unknownError'),
         }),
       });
-    } finally {
-      setLoadingLogs(false);
     }
+    try {
+      const deadRes = await webhookApi.listDeadLetters(webhook.sessionId, webhook.id, 50);
+      setDeadLetters(deadRes);
+    } catch {
+      // Dead-letter listing requires the BullMQ queue. When it is disabled we still
+      // show the deliveries that are available and surface a note instead of failing.
+      setDeadLetters([]);
+      setDeadLettersUnavailable(true);
+    }
+    setLoadingLogs(false);
   };
 
   const handleRetryJob = async (jobId: string) => {
@@ -686,7 +692,11 @@ export function Webhooks() {
                     )}
                   </div>
                   {deadLetters.length === 0 ? (
-                    <p className="deliveries-empty">{t('webhooks.deliveries.noDeadLetters')}</p>
+                    <p className="deliveries-empty">
+                      {deadLettersUnavailable
+                        ? t('webhooks.deliveries.queueDisabled')
+                        : t('webhooks.deliveries.noDeadLetters')}
+                    </p>
                   ) : (
                     <div className="deliveries-table">
                       <div className="table-row header">

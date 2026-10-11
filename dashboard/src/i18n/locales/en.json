@@ -236,7 +236,8 @@
       "recent": "Recent deliveries",
       "empty": "No delivery attempts recorded yet. Deliveries appear here once an event fires.",
       "deadLetters": "Dead letters (retries exhausted)",
-      "noDeadLetters": "No dead-lettered deliveries. All good."
+      "noDeadLetters": "No dead-lettered deliveries. All good.",
+      "queueDisabled": "Dead-letter queue is disabled (queue.enabled=false). Enable the BullMQ webhook queue to inspect and replay dead letters."
     },
     "toasts": {
       "created": "Webhook created successfully",
