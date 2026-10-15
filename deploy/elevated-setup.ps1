@@ -88,6 +88,12 @@ $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument (
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 
+# Safety net: re-issue the trigger every 15 minutes, indefinitely. With MultipleInstances set
+# to IgnoreNew this is a no-op while the watchdog is alive, but it guarantees a fresh start if
+# the supervisor is gone and Task Scheduler's own restart-on-failure did not bring it back.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
+
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
@@ -101,7 +107,7 @@ if (-not $Force -and (Get-ScheduledTask -TaskName $TaskName -ErrorAction Silentl
 } else {
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $settings -Principal $principal -Description (
-            'OpenWA + watchdog. Auto-starts at logon, survives battery changes, restarts on failure, no execution time limit.'
+            'OpenWA + watchdog. Auto-starts at logon (re-triggered every 15 min as a safety net), survives battery changes, restarts on failure, no execution time limit.'
         ) -Force | Out-Null
     Write-Step 'task registered'
 }

@@ -51,8 +51,26 @@ param(
   # than the readiness probe it shares a loop with.
   [int] $ReapEveryTicks = 6,
 
+  # How often to check that every session is actually up and restart the ones that are not.
+  # Same cadence rationale as the orphan reaper: an HTTP call every few ticks is cheap, but a
+  # session that has gone down stays down until an operator acts, so a periodic re-start is
+  # what keeps the API useful overnight.
+  [int] $SessionGuardEveryTicks = 6,
+
+  # Base seconds before the guard retries the same session. Doubles on each consecutive
+  # failure (capped at 30 min) so a session that cannot come back is retried slowly instead
+  # of launching a fresh Chromium every tick.
+  [int] $SessionGuardCooldownSeconds = 120,
+
+  # A session that has sat in `initializing` this long is treated as wedged and restarted.
+  # Generous on purpose: a cold Chromium plus a LocalAuth restore is around a minute and a
+  # busy handshake can take longer, so the point is to catch one that will never advance,
+  # not to race a slow one.
+  [int] $SessionGuardStuckSeconds = 600,
+
   [switch] $DisableResourceGuard,
-  [switch] $DisableOrphanReaper
+  [switch] $DisableOrphanReaper,
+  [switch] $DisableSessionGuard
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,6 +211,112 @@ function Invoke-OrphanReaper([int] $NodePid) {
   if ($total -gt 0) { Write-WatchLog "reaped $total orphaned chromium process(es)" }
 }
 
+# ── Session guard ─────────────────────────────────────────────────────────────
+#
+# Keeping node alive is not the same as keeping the API useful. whatsapp-web.js marks a
+# session `failed` on auth_failure and, once it is terminal, the service will not bring it
+# back on its own -- so node can answer /health/ready forever while both live sessions sit
+# in `failed`/`disconnected`. That is the state this machine actually gets into overnight,
+# and without a guard nothing short of a manual /start clears it.
+#
+# The guard lists sessions, and for any that are in a terminal state asks the API to start
+# them again. Sessions that are genuinely making progress -- qr_ready, authenticating, or a
+# recent initializing -- are left alone, because re-issuing /start on them only yields
+# "already started" noise (and would discard a QR the operator is waiting to scan). The one
+# exception is a session wedged in `initializing` well past any plausible startup time, which
+# is restarted via stop+start.
+#
+# Retries back off per session: two minutes after the first failed attempt, four after the
+# second, and so on up to 30 minutes. A session that genuinely cannot come back therefore
+# costs one Chromium launch every half hour instead of one every tick, and a session that
+# recovers has its state reset the moment it is seen `ready` again.
+
+$script:sessionGuardState = @{}
+
+function Get-ApiKey {
+  $keyFile = Join-Path $DataDir '.api-key'
+  if (-not (Test-Path -LiteralPath $keyFile)) { return $null }
+  try { return (Get-Content -LiteralPath $keyFile -Raw).Trim() } catch { return $null }
+}
+
+function Invoke-SessionGuard($ApiKey) {
+  if ($DisableSessionGuard) { return }
+  if (-not $ApiKey) { return }
+
+  $headers = @{ 'X-API-Key' = $ApiKey }
+  $base    = "http://localhost:$($env:PORT)/api/sessions"
+
+  try {
+    $sessions = Invoke-RestMethod -Uri $base -Headers $headers -TimeoutSec 8
+  } catch {
+    Write-WatchLog "session guard: could not list sessions: $($_.Exception.Message)"
+    return
+  }
+
+  $now = Get-Date
+
+  foreach ($s in @($sessions)) {
+    if ($s.status -eq 'ready') {
+      # Recovered (or never fell over): drop the backoff so a later failure starts fresh.
+      if ($script:sessionGuardState.ContainsKey($s.id)) { $script:sessionGuardState.Remove($s.id) }
+      continue
+    }
+
+    $state = $script:sessionGuardState[$s.id]
+    if (-not $state) {
+      $state = @{ Last = [datetime]::MinValue; Attempts = 0; SinceProgress = $null }
+      $script:sessionGuardState[$s.id] = $state
+    }
+
+    if ($s.status -eq 'initializing') {
+      # A session that is coming up is normally left alone. But one that has not left
+      # `initializing` for a long time is the fingerprint of a wedged Chromium: the status
+      # never advances and no resource ceiling is crossed, so nothing else here would notice.
+      # The age is tracked by observation rather than read from the row, which keeps it immune
+      # to clock/timezone skew. First sighting records the moment; only a later tick can fire.
+      if (-not $state.SinceProgress) { $state.SinceProgress = $now; continue }
+      if (($now - $state.SinceProgress).TotalSeconds -lt $SessionGuardStuckSeconds) { continue }
+      $restart = $true
+    } elseif ($s.status -in @('created', 'disconnected', 'failed')) {
+      $state.SinceProgress = $null
+      $restart = $false
+    } else {
+      # qr_ready / authenticating / anything else: actively in progress or waiting on a scan.
+      # Restarting a qr_ready session would throw away the code the operator is about to scan.
+      $state.SinceProgress = $null
+      continue
+    }
+
+    $cooldown = [Math]::Min($SessionGuardCooldownSeconds * [Math]::Pow(2, $state.Attempts), 1800)
+    if (($now - $state.Last).TotalSeconds -lt $cooldown) { continue }
+
+    $state.Last = $now
+    $state.Attempts++
+
+    if ($restart) {
+      # A stuck session usually still has its engine registered, and start() on a registered
+      # engine is rejected with "already started" -- so clear it first. stop() is best-effort:
+      # a wedged engine may not answer, which is exactly why the start below is the real fix.
+      Write-WatchLog "session guard: restarting stuck '$($s.name)' (in initializing for over ${SessionGuardStuckSeconds}s)"
+      try {
+        Invoke-RestMethod -Uri "$base/$($s.id)/stop" -Headers $headers -Method Post -TimeoutSec 20 | Out-Null
+      } catch {
+        Write-WatchLog "session guard: stop (pre-restart) for '$($s.name)' failed: $($_.Exception.Message)"
+      }
+      Start-Sleep -Seconds 2
+      $state.SinceProgress = $null
+    }
+
+    Write-WatchLog "session guard: starting '$($s.name)' (status=$($s.status), attempt $($state.Attempts))"
+    try {
+      Invoke-RestMethod -Uri "$base/$($s.id)/start" -Headers $headers -Method Post -TimeoutSec 15 | Out-Null
+      Write-WatchLog "session guard: start requested for '$($s.name)'"
+    } catch {
+      Write-WatchLog "session guard: start failed for '$($s.name)': $($_.Exception.Message)"
+    }
+  }
+}
+
 # ── Resource guard ───────────────────────────────────────────────────────────
 #
 # A wedged Chromium that never releases its profile leaves node holding memory it will not
@@ -221,6 +345,22 @@ foreach ($d in @($RunDir, $LogDir, $Sessions, $env:STORAGE_LOCAL_PATH)) {
   }
 }
 $HealthUrl = "http://localhost:$($env:PORT)/api/health/ready"
+
+# Single-instance guard. Two supervisors racing on the same port is how a session ends up
+# wedged in `initializing`: the loser runs the startup reset/resume, then dies on EADDRINUSE
+# before it can finish, and the survivor is left with no engine for the session the loser
+# touched -- a status the session guard deliberately does not override. Task Scheduler's
+# IgnoreNew only prevents two *task* instances, not a hand-started watchdog running alongside
+# one, so the exclusion has to live here. An abandoned mutex (previous holder died) counts as
+# acquired so a crash never locks the supervisor out permanently.
+$instanceMutex = New-Object System.Threading.Mutex($false, 'Local\OpenWA-Watchdog')
+$isOnlyInstance = $false
+try { $isOnlyInstance = $instanceMutex.WaitOne(0) }
+catch [System.Threading.AbandonedMutexException] { $isOnlyInstance = $true }
+if (-not $isOnlyInstance) {
+  Write-WatchLog 'another watchdog instance is already running; exiting'
+  exit 0
+}
 
 $failures = 0
 $attempt  = 0
@@ -294,6 +434,17 @@ while ($true) {
         Invoke-OrphanReaper $proc.Id
       } catch {
         Write-WatchLog "orphan reaper error: $($_.Exception.Message)"
+      }
+    }
+
+    # ── Session guard ───────────────────────────────────────────────────────────
+    # Only while the server is answering: a start request against a half-dead node just
+    # fails, and the fix for an unresponsive node is the restart path below, not this.
+    if (-not $unhealthyReason -and -not $DisableSessionGuard -and (($tick % $SessionGuardEveryTicks) -eq 0)) {
+      try {
+        Invoke-SessionGuard (Get-ApiKey)
+      } catch {
+        Write-WatchLog "session guard error: $($_.Exception.Message)"
       }
     }
 
