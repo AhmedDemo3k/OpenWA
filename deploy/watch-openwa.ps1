@@ -93,9 +93,9 @@ function Write-WatchLog([string]$Message) {
 $env:NODE_ENV                = 'production'
 $env:PORT                    = '2785'
 $env:LOG_LEVEL               = 'info'
-$env:DATABASE_MAIN_NAME      = Join-Path $RunDir 'main.sqlite'
-$env:DATABASE_NAME           = Join-Path $RunDir 'data.sqlite'
-$env:STORAGE_LOCAL_PATH      = Join-Path $RunDir 'media'
+$env:DATABASE_MAIN_NAME      = Join-Path $DataDir 'main.sqlite'
+$env:DATABASE_NAME           = Join-Path $DataDir 'openwa.sqlite'
+$env:STORAGE_LOCAL_PATH      = Join-Path $DataDir 'media'
 # The profiles are the one piece of state that is large and genuinely worth keeping in the
 # project, and they are already there. Pointing this at %TEMP% is what split the instance in
 # half: the databases moved with the environment while the authenticated Chromium profiles
