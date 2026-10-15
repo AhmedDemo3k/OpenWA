@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { spawn } from 'child_process';
 import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
@@ -432,6 +433,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     if (!client) return;
 
+    const browser = (client as unknown as { pupBrowser?: import('puppeteer').Browser }).pupBrowser;
+
     try {
       // Drop listeners first so late events from a dying browser cannot re-enter
       // callbacks that reference this adapter (and everything it captured).
@@ -444,6 +447,70 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       await client.destroy();
     } catch (error) {
       this.logger.warn('Client destroy failed during teardown:', String(error));
+    }
+
+    await this.killBrowser(browser);
+  }
+
+  /**
+   * Guarantees the puppeteer browser process is dead.
+   *
+   * whatsapp-web.js Client.destroy() only calls browser.close() when
+   * browser.isConnected() is truthy. A browser that is still launching, sitting on the
+   * QR screen, or already flagged disconnected is skipped outright, and close() can
+   * also reject before the auth strategy is reached. In every such case the Chromium
+   * process (plus its renderer children) would outlive the session for the whole server
+   * lifetime. Close the browser directly and, if the process is still alive, reap the
+   * whole tree.
+   */
+  private async killBrowser(browser?: import('puppeteer').Browser): Promise<void> {
+    if (!browser) return;
+
+    try {
+      await browser.close();
+    } catch {
+      // Unreachable or already-closed browser; the process check below still runs.
+    }
+
+    let proc: import('child_process').ChildProcess | null | undefined;
+    try {
+      proc = browser.process();
+    } catch {
+      proc = null;
+    }
+
+    if (!proc || proc.pid == null || proc.exitCode !== null || proc.killed) {
+      return;
+    }
+
+    // close() resolves before the OS has always reaped the process; give it a moment.
+    for (let i = 0; i < 20 && proc.exitCode === null; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    if (proc.exitCode !== null || proc.killed) {
+      return;
+    }
+
+    const pid = proc.pid;
+    this.logger.warn(`Killing lingering browser process ${pid} during teardown`, {
+      sessionId: this.config.sessionId,
+      action: 'browser_killed',
+    });
+
+    try {
+      if (process.platform === 'win32') {
+        // /T reaps the whole tree; Chromium renderers outlive a bare kill of the parent.
+        await new Promise<void>(resolve => {
+          const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+          killer.on('close', () => resolve());
+          killer.on('error', () => resolve());
+        });
+      } else {
+        proc.kill('SIGKILL');
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to kill lingering browser process ${pid}`, String(error));
     }
   }
 
@@ -495,9 +562,22 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.pushName;
   }
 
+  private async resolveSendId(chatId: string): Promise<string> {
+    if (!chatId.endsWith('@c.us')) {
+      return chatId;
+    }
+    try {
+      const numberId = await this.client!.getNumberId(chatId);
+      return numberId?._serialized ?? chatId;
+    } catch {
+      return chatId;
+    }
+  }
+
   async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
     this.ensureReady();
-    const msg = await this.client!.sendMessage(chatId, text);
+    const to = await this.resolveSendId(chatId);
+    const msg = await this.client!.sendMessage(to, text);
     if (!msg) {
       this.logger.warn(
         `sendMessage returned undefined (chatId=${chatId}, text="${text.slice(0, 60)}") — message likely delivered but no response object`,

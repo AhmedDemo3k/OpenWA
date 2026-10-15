@@ -7,6 +7,9 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Repository, In, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
@@ -64,6 +67,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
 
+  // Sessions whose engine reported a terminal FAILED state (e.g. auth_failure). Held until
+  // a successful (re)start so a late `disconnected` callback cannot downgrade `failed`
+  // back to `disconnected` nor trigger a reconnect that cannot succeed.
+  private readonly failed = new Set<string>();
+
+  // Session ids whose engine is mid-teardown. destroy() always ends by emitting
+  // DISCONNECTED, so status changes raised while this flag is set are dropped -- otherwise
+  // the teardown would overwrite the terminal status we deliberately recorded.
+  private readonly releasing = new Set<string>();
+
   // Serialises start/stop/delete/reconnect per session id
   private readonly locks = new KeyedMutex();
 
@@ -83,6 +96,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -328,11 +342,50 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       await this.dataSource.transaction(async manager => {
         await manager.remove(session);
       });
+
+      // The engine (and therefore Chromium) is torn down above, so the on-disk LocalAuth
+      // profile is idle and can be deleted with the row.
+      this.removeSessionData(session);
+
       this.logger.log(`Session deleted: ${session.name}`, {
         sessionId: id,
         action: 'delete',
       });
     });
+  }
+
+  /**
+   * Removes the on-disk LocalAuth profile for a session.
+   *
+   * whatsapp-web.js stores each session under `<sessionDataPath>/session-<name>` and
+   * never clears it on its own (Client.destroy() -> LocalAuth has no destroy()). A deleted
+   * session therefore left its Chromium profile (cookies, IndexedDB, cached WhatsApp Web
+   * bundle) behind forever. Best-effort: the DB row is already gone, so a failure here
+   * must not fail the request.
+   */
+  private removeSessionData(session: Session): void {
+    const dataPath = this.configService?.get<string>('engine.sessionDataPath') ?? './data/sessions';
+    const base = path.resolve(dataPath);
+    const dir = path.join(base, `session-${session.name}`);
+
+    // Session names are validated to [a-zA-Z0-9_-] on create, but delete must not trust
+    // that: resolve and confirm the target stays inside the sessions root.
+    if (dir !== base && !dir.startsWith(base + path.sep)) {
+      this.logger.warn(`Refusing to remove session data outside ${base}: ${dir}`, {
+        sessionId: session.id,
+        action: 'session_data_remove_skipped',
+      });
+      return;
+    }
+
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to remove session data directory ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+        { sessionId: session.id, action: 'session_data_remove_failed' },
+      );
+    }
   }
 
   async start(id: string): Promise<Session> {
@@ -344,6 +397,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       if (this.engines.has(id)) {
         throw new BadRequestException('Session is already started');
       }
+
+      // A fresh start clears any terminal-failure state carried over from a previous run.
+      this.failed.delete(id);
 
       // Execute hook before starting
       await this.hookManager.execute(
@@ -410,6 +466,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
           this.safely('status:qr_ready', id, () => this.updateStatus(id, SessionStatus.QR_READY));
         },
         onReady: (phone: string, pushName: string): void => {
+          this.failed.delete(id);
           this.logger.log(`Session ready: ${phone}`, {
             sessionId: id,
             phone,
@@ -532,12 +589,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
             ),
           );
 
-          this.safely('status:disconnected', id, () => this.updateStatus(id, SessionStatus.DISCONNECTED));
+          this.safely('status:disconnected', id, () =>
+            this.updateStatus(id, this.failed.has(id) ? SessionStatus.FAILED : SessionStatus.DISCONNECTED),
+          );
+
+          // An auth_failure surfaces as FAILED immediately followed by this disconnect
+          // callback. Keep the terminal `failed` status, stop reconnecting, and release the
+          // engine so its Chromium tree is not left running and a later start() is not
+          // rejected with "already started".
+          if (this.failed.has(id)) {
+            this.cancelReconnect(id);
+            this.safely('engine:release_failed', id, () => this.releaseEngine(id, 'auth_failure'));
+            return;
+          }
 
           // Attempt to reconnect
           this.scheduleReconnect(id, session, reason);
         },
         onStateChanged: (engineState: EngineStatus): void => {
+          // Teardown-induced events (destroy() ends in DISCONNECTED) must not overwrite the
+          // terminal status we already recorded for a failed session.
+          if (this.releasing.has(id)) {
+            return;
+          }
+
+          if (engineState === EngineStatus.FAILED) {
+            this.failed.add(id);
+          }
+
           const statusMap: Record<EngineStatus, SessionStatus> = {
             [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
             [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
@@ -599,6 +678,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         action: 'reconnect_skipped_terminal',
       });
       this.cancelReconnect(id);
+      this.safely('engine:release_terminal', id, () => this.releaseEngine(id, 'terminal_disconnect'));
       return;
     }
 
@@ -613,6 +693,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         { sessionId: id, action: 'reconnect_disabled_flapping' },
       );
       this.cancelReconnect(id);
+      this.safely('engine:release_flapping', id, () => this.releaseEngine(id, 'flapping'));
       return;
     }
 
@@ -622,6 +703,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         attempts: state.attempts,
         action: 'reconnect_failed',
       });
+      this.cancelReconnect(id);
+      this.safely('engine:release_max_attempts', id, () => this.releaseEngine(id, 'max_reconnect_attempts'));
       return;
     }
 
@@ -680,6 +763,25 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       state.timer = null;
     }
     this.reconnectStates.delete(id);
+  }
+
+  /**
+   * Tears a session's engine down and forgets it, so an engine that can no longer be used
+   * (auth failure, terminal disconnect, flapping) does not leak its Chromium tree or keep
+   * the session marked "already started". Safe to call when no engine is registered.
+   */
+  private async releaseEngine(id: string, context: string): Promise<void> {
+    const engine = this.engines.get(id);
+    if (!engine) return;
+    this.engines.delete(id);
+    // destroy() finishes by emitting DISCONNECTED; ignore that so it cannot clobber the
+    // terminal status recorded by the caller.
+    this.releasing.add(id);
+    try {
+      await this.destroyEngineQuietly(engine, id, context);
+    } finally {
+      this.releasing.delete(id);
+    }
   }
 
   /**

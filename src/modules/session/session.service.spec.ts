@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Repository, DataSource } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { SessionService } from './session.service';
@@ -52,6 +56,7 @@ describe('SessionService', () => {
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
   let webhookService: jest.Mocked<Partial<WebhookService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
+  let configService: jest.Mocked<Partial<ConfigService>>;
   let mockEngine: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -100,6 +105,10 @@ describe('SessionService', () => {
       execute: jest.fn().mockResolvedValue({ continue: true, data: {} }),
     };
 
+    configService = {
+      get: jest.fn().mockReturnValue('./data/sessions'),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SessionService,
@@ -115,6 +124,10 @@ describe('SessionService', () => {
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
+        {
+          provide: ConfigService,
+          useValue: configService,
+        },
       ],
     }).compile();
 
@@ -258,6 +271,46 @@ describe('SessionService', () => {
 
       await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
       expect(dataSource.transaction).toHaveBeenCalled();
+    });
+
+    it('removes the on-disk LocalAuth profile for the session', async () => {
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-sessions-'));
+      const sessionDir = path.join(base, 'session-test-session');
+      fs.mkdirSync(path.join(sessionDir, 'Default'), { recursive: true });
+      fs.writeFileSync(path.join(sessionDir, 'Default', 'Cookies'), 'x');
+
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (configService.get as jest.Mock).mockReturnValue(base);
+
+      try {
+        await service.delete('sess-uuid-1');
+
+        expect(fs.existsSync(sessionDir)).toBe(false);
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses to remove session data that would escape the sessions root', async () => {
+      const base = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-sessions-'));
+      const sentinel = path.resolve(base, '..', 'openwa-escape-sentinel');
+      fs.mkdirSync(sentinel, { recursive: true });
+
+      // No validation runs on delete, so a hostile name must still be contained by the
+      // resolve-and-check guard rather than deleting a sibling directory.
+      const session = createMockSession({ name: `${path.sep}..${path.sep}openwa-escape-sentinel` });
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (configService.get as jest.Mock).mockReturnValue(base);
+
+      try {
+        await service.delete('sess-uuid-1');
+
+        expect(fs.existsSync(sentinel)).toBe(true);
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true });
+        fs.rmSync(sentinel, { recursive: true, force: true });
+      }
     });
   });
 
@@ -759,7 +812,7 @@ describe('SessionService', () => {
       return firstEngineCallbacks(mockEngine.initialize);
     }
 
-    it('does NOT auto-reconnect after an explicit logout', async () => {
+    it('does NOT auto-reconnect after an explicit logout and releases the engine', async () => {
       const callbacks = await primeReadySession();
 
       // whatsapp-web.js reports a user-requested logout as this disconnect reason.
@@ -767,15 +820,35 @@ describe('SessionService', () => {
 
       // A logout needs a fresh QR scan, so retrying is pointless churn.
       expect(jest.getTimerCount()).toBe(0);
-      expect(service.getActiveCount()).toBe(1);
+
+      // The engine must be torn down too: leaving it registered keeps its Chromium tree
+      // alive and makes every later start() answer "already started".
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(service.getActiveCount()).toBe(0);
+      expect(mockEngine.destroy).toHaveBeenCalled();
     });
 
-    it('does NOT auto-reconnect after an authentication failure', async () => {
+    it('does NOT auto-reconnect after an authentication failure and releases the engine', async () => {
       const callbacks = await primeReadySession();
 
+      // The adapter reports FAILED first and then routes it through onDisconnected.
+      callbacks.onStateChanged(EngineStatus.FAILED);
       callbacks.onDisconnected('Authentication failed');
 
       expect(jest.getTimerCount()).toBe(0);
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(service.getActiveCount()).toBe(0);
+      expect(mockEngine.destroy).toHaveBeenCalled();
+
+      // The terminal `failed` status must survive the teardown (which ends in DISCONNECTED).
+      const statuses = (repository.update as jest.Mock).mock.calls.map(
+        (call: [string, { status?: string }]) => call[1]?.status,
+      );
+      expect(statuses).toContain(SessionStatus.FAILED);
     });
 
     it('does NOT auto-reconnect after a ban/block', async () => {
