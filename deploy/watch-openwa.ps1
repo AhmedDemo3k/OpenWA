@@ -111,21 +111,34 @@ function Write-WatchLog([string]$Message) {
 $env:NODE_ENV                = 'production'
 $env:PORT                    = '2785'
 $env:LOG_LEVEL               = 'info'
-$env:DATABASE_MAIN_NAME      = Join-Path $DataDir 'main.sqlite'
+# v0.24.0 names. MAIN_DATABASE_NAME was DATABASE_MAIN_NAME; synchronize stays off in
+# production because the schema is owned by the migration CLI, not by boot-time sync.
+$env:MAIN_DATABASE_NAME      = Join-Path $DataDir 'main.sqlite'
+$env:MAIN_DATABASE_SYNCHRONIZE = 'false'
 $env:DATABASE_NAME           = Join-Path $DataDir 'openwa.sqlite'
+$env:DATABASE_SYNCHRONIZE    = 'false'
 $env:STORAGE_LOCAL_PATH      = Join-Path $DataDir 'media'
 # The profiles are the one piece of state that is large and genuinely worth keeping in the
 # project, and they are already there. Pointing this at %TEMP% is what split the instance in
 # half: the databases moved with the environment while the authenticated Chromium profiles
 # stayed behind, so a restart logged a session in from scratch.
 $env:SESSION_DATA_PATH       = $Sessions
-# Without this the auth service cannot rotate a leaked development key out of a production
-# database, because it has no way to prove the replacement is observable. Pointing it at the
-# real key file opts in to that safety check.
-$env:AUTH_KEY_FILE           = Join-Path $DataDir '.api-key'
+# Where the first-boot admin key is written and read back from on later boots. The v0.1.6
+# AUTH_KEY_FILE was renamed BOOTSTRAP_KEY_FILE in v0.24.0; an old name here is silently
+# ignored. Keeps the key inside data/, beside the databases it authenticates against.
+$env:BOOTSTRAP_KEY_FILE      = Join-Path $DataDir '.api-key'
 $env:QUEUE_ENABLED           = 'false'
 $env:CACHE_ENABLED           = 'false'
 $env:PUPPETEER_HEADLESS      = 'true'
+# Sessions reconnect on their own at boot (documented production behaviour); the watchdog's
+# session guard stays as the fallback for one that later drops while node is still up.
+$env:AUTO_START_SESSIONS     = 'true'
+# Give an in-flight webhook POST time to finish at shutdown; must be >= WEBHOOK_TIMEOUT
+# (10s here) or boot warns and the delivery is truncated. Moves the graceful-exit deadline.
+$env:WEBHOOK_SHUTDOWN_DRAIN_MS = '15000'
+# NODE_ENV is forced to production above, so silence the CSP upgrade that would render the
+# dashboard blank on the plain-HTTP localhost path (the Funnel HTTPS path is unaffected).
+$env:CSP_UPGRADE_INSECURE_REQUESTS = 'false'
 # Rate limits are deliberately left at the application defaults (10/s, 100/min, 1000/hour).
 # The raised limits this instance used to carry were only needed while polling the QR code by
 # hand; leaving 60000/hour on a publicly reachable endpoint would be a DoS gift.
